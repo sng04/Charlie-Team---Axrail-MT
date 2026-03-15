@@ -3,26 +3,82 @@ import os
 
 import aws_cdk as cdk
 
-from charlie_team___axrail_mt.charlie_team___axrail_mt_stack import CharlieTeamAxrailMtStack
+from charlie_team___axrail_mt.shared_resources_stack import SharedResourcesStack
+from charlie_team___axrail_mt.dynamodb_stack import DynamoDBStack
+from charlie_team___axrail_mt.cognito_stack import CognitoStack
+from charlie_team___axrail_mt.lambda_stack import LambdaStack
+from charlie_team___axrail_mt.api_services_stack import ApiServicesStack
+from charlie_team___axrail_mt.seed_admin_stack import SeedAdminStack
+from charlie_team___axrail_mt.environment import get_environment
 
 
 app = cdk.App()
-CharlieTeamAxrailMtStack(app, "CharlieTeamAxrailMtStack",
-    # If you don't specify 'env', this stack will be environment-agnostic.
-    # Account/Region-dependent features and context lookups will not work,
-    # but a single synthesized template can be deployed anywhere.
 
-    # Uncomment the next line to specialize this stack for the AWS Account
-    # and Region that are implied by the current CLI configuration.
+environment = app.node.try_get_context("environment") or "dev"
+env_config = get_environment(environment)
 
-    #env=cdk.Environment(account=os.getenv('CDK_DEFAULT_ACCOUNT'), region=os.getenv('CDK_DEFAULT_REGION')),
+env = cdk.Environment(
+    account=env_config["account"],
+    region=env_config["region"],
+)
 
-    # Uncomment the next line if you know exactly what Account and Region you
-    # want to deploy the stack to. */
+shared_resources = SharedResourcesStack(
+    app,
+    f"AXRAIL-SharedResources-{environment}",
+    env_name=environment,
+    env=env,
+)
 
-    #env=cdk.Environment(account='123456789012', region='us-east-1'),
+dynamodb_stack = DynamoDBStack(
+    app,
+    f"AXRAIL-DynamoDB-{environment}",
+    env_name=environment,
+    env=env,
+)
 
-    # For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html
-    )
+cognito_stack = CognitoStack(
+    app,
+    f"AXRAIL-Cognito-{environment}",
+    env_name=environment,
+    env=env,
+)
+
+lambda_stack = LambdaStack(
+    app,
+    f"AXRAIL-Lambda-{environment}",
+    env_name=environment,
+    shared_resources=shared_resources,
+    dynamodb_stack=dynamodb_stack,
+    cognito_stack=cognito_stack,
+    env=env,
+)
+
+api_services_stack = ApiServicesStack(
+    app,
+    f"AXRAIL-ApiServices-{environment}",
+    env_name=environment,
+    lambda_stack=lambda_stack,
+    env=env,
+)
+
+seed_admin_stack = SeedAdminStack(
+    app,
+    f"AXRAIL-SeedAdmin-{environment}",
+    env_name=environment,
+    dynamodb_stack=dynamodb_stack,
+    cognito_stack=cognito_stack,
+    admin_email="admin@axrail.com",
+    admin_temp_password="TempAdmin@123",
+    env=env,
+)
+
+lambda_stack.add_dependency(shared_resources)
+lambda_stack.add_dependency(dynamodb_stack)
+lambda_stack.add_dependency(cognito_stack)
+
+api_services_stack.add_dependency(lambda_stack)
+
+seed_admin_stack.add_dependency(cognito_stack)
+seed_admin_stack.add_dependency(dynamodb_stack)
 
 app.synth()
