@@ -39,6 +39,9 @@ class LambdaStack(Stack):
             "USER_POOL_ID": self.cognito_stack.user_pool.user_pool_id,
             "CLIENT_ID": self.cognito_stack.user_pool_client.user_pool_client_id,
             "DYNAMODB_TABLE": self.dynamodb_stack.users_table.table_name,
+            "USERS_TABLE": self.dynamodb_stack.users_table.table_name,
+            "PROJECTS_TABLE": self.dynamodb_stack.projects_table.table_name,
+            "PROJECT_USERS_TABLE": self.dynamodb_stack.project_users_table.table_name,
             "POWERTOOLS_SERVICE_NAME": "axrail-auth",
             "LOG_LEVEL": "INFO",
         }
@@ -82,6 +85,53 @@ class LambdaStack(Stack):
             "ChangePassword",
             "lambdas/Functions/ChangePassword"
         )
+        
+        # Project CRUD
+        self.list_projects_fn = self._create_lambda_function(
+            "ListProjects",
+            "lambdas/Functions/ListProjects"
+        )
+        
+        self.create_project_fn = self._create_lambda_function(
+            "CreateProject",
+            "lambdas/Functions/CreateProject"
+        )
+        
+        self.get_project_fn = self._create_lambda_function(
+            "GetProject",
+            "lambdas/Functions/GetProject"
+        )
+        
+        self.update_project_fn = self._create_lambda_function(
+            "UpdateProject",
+            "lambdas/Functions/UpdateProject"
+        )
+        
+        self.delete_project_fn = self._create_lambda_function(
+            "DeleteProject",
+            "lambdas/Functions/DeleteProject"
+        )
+        
+        # ProjectUser CRUD
+        self.assign_user_to_project_fn = self._create_lambda_function(
+            "AssignUserToProject",
+            "lambdas/Functions/AssignUserToProject"
+        )
+        
+        self.remove_user_from_project_fn = self._create_lambda_function(
+            "RemoveUserFromProject",
+            "lambdas/Functions/RemoveUserFromProject"
+        )
+        
+        self.get_project_users_fn = self._create_lambda_function(
+            "GetProjectUsers",
+            "lambdas/Functions/GetProjectUsers"
+        )
+        
+        self.get_user_projects_fn = self._create_lambda_function(
+            "GetUserProjects",
+            "lambdas/Functions/GetUserProjects"
+        )
 
     def _create_exports(self) -> None:
         CfnOutput(
@@ -110,4 +160,67 @@ class LambdaStack(Stack):
             "ChangePasswordFnArn",
             value=self.change_password_fn.function_arn,
             export_name=f"AXRAIL-ChangePasswordFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "ListProjectsFnArn",
+            value=self.list_projects_fn.function_arn,
+            export_name=f"AXRAIL-ListProjectsFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "CreateProjectFnArn",
+            value=self.create_project_fn.function_arn,
+            export_name=f"AXRAIL-CreateProjectFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "GetProjectFnArn",
+            value=self.get_project_fn.function_arn,
+            export_name=f"AXRAIL-GetProjectFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "UpdateProjectFnArn",
+            value=self.update_project_fn.function_arn,
+            export_name=f"AXRAIL-UpdateProjectFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "DeleteProjectFnArn",
+            value=self.delete_project_fn.function_arn,
+            export_name=f"AXRAIL-DeleteProjectFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "AssignUserToProjectFnArn",
+            value=self.assign_user_to_project_fn.function_arn,
+            export_name=f"AXRAIL-AssignUserToProjectFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "RemoveUserFromProjectFnArn",
+            value=self.remove_user_from_project_fn.function_arn,
+            export_name=f"AXRAIL-RemoveUserFromProjectFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "GetProjectUsersFnArn",
+            value=self.get_project_users_fn.function_arn,
+            export_name=f"AXRAIL-GetProjectUsersFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "GetUserProjectsFnArn",
+            value=self.get_user_projects_fn.function_arn,
+            export_name=f"AXRAIL-GetUserProjectsFnArn-{self.env_name}",
         )

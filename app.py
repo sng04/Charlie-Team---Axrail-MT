@@ -58,6 +58,7 @@ api_services_stack = ApiServicesStack(
     f"AXRAIL-ApiServices-{environment}",
     env_name=environment,
     lambda_stack=lambda_stack,
+    shared_resources=shared_resources,
     env=env,
 )
 
