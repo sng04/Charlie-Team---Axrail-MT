@@ -32,10 +32,12 @@ class ApiServicesStack(Stack):
         
         self._create_api_gateway()
         self._create_admin_authorizer_lambda()
-        self._create_authorizer()
+        self._create_auth_authorizer_lambda()
+        self._create_authorizers()
         self._create_auth_routes()
         self._create_project_routes()
         self._create_project_user_routes()
+        self._create_session_routes()
         self._create_exports()
 
     def _create_api_gateway(self) -> None:
@@ -79,13 +81,44 @@ class ApiServicesStack(Stack):
             tracing=_lambda.Tracing.ACTIVE,
         )
 
-    def _create_authorizer(self) -> None:
-        # Custom Lambda Authorizer untuk admin-only endpoints
+    def _create_auth_authorizer_lambda(self) -> None:
+        self.auth_authorizer_fn = _lambda.Function(
+            self,
+            "AuthAuthorizerFn",
+            function_name=f"AXRAIL-AuthAuthorizer-{self.env_name}",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("lambdas/Functions/AuthAuthorizer"),
+            role=self.shared_resources.lambda_role,
+            layers=[
+                self.shared_resources.shared_layer,
+                self.shared_resources.powertools_layer,
+            ],
+            environment={
+                "POWERTOOLS_SERVICE_NAME": "axrail-authorizer",
+                "LOG_LEVEL": "INFO",
+            },
+            timeout=Duration.seconds(10),
+            memory_size=128,
+            tracing=_lambda.Tracing.ACTIVE,
+        )
+
+    def _create_authorizers(self) -> None:
+        # Admin-only authorizer
         self.admin_authorizer = apigw.TokenAuthorizer(
             self,
             "AdminAuthorizer",
             authorizer_name=f"AXRAIL-AdminAuthorizer-{self.env_name}",
             handler=self.admin_authorizer_fn,
+            results_cache_ttl=Duration.minutes(5),
+        )
+        
+        # Auth authorizer (admin or user)
+        self.auth_authorizer = apigw.TokenAuthorizer(
+            self,
+            "AuthAuthorizer",
+            authorizer_name=f"AXRAIL-AuthAuthorizer-{self.env_name}",
+            handler=self.auth_authorizer_fn,
             results_cache_ttl=Duration.minutes(5),
         )
 
@@ -110,6 +143,8 @@ class ApiServicesStack(Stack):
         users_resource.add_method(
             "POST",
             apigw.LambdaIntegration(self.lambda_stack.create_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
         )
         
         change_password_resource = auth_resource.add_resource("change-password")
@@ -203,6 +238,62 @@ class ApiServicesStack(Stack):
             "GET",
             apigw.LambdaIntegration(self.lambda_stack.get_user_projects_fn),
             authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+    def _create_session_routes(self) -> None:
+        sessions_resource = self.api.root.add_resource("sessions")
+        
+        # GET /sessions - List all sessions (authenticated users)
+        sessions_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.list_sessions_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+        
+        # POST /sessions - Create session (authenticated users)
+        sessions_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.create_session_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+        
+        session_resource = sessions_resource.add_resource("{sessionId}")
+        
+        # GET /sessions/{sessionId} - Get single session (authenticated users)
+        session_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.get_session_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+        
+        # PUT /sessions/{sessionId} - Update session (authenticated users)
+        session_resource.add_method(
+            "PUT",
+            apigw.LambdaIntegration(self.lambda_stack.update_session_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+        
+        # DELETE /sessions/{sessionId} - Delete session (authenticated users)
+        session_resource.add_method(
+            "DELETE",
+            apigw.LambdaIntegration(self.lambda_stack.delete_session_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+        
+        # GET /projects/{projectId}/sessions - Get sessions for project (authenticated users)
+        projects_resource = self.api.root.get_resource("projects")
+        project_resource = projects_resource.get_resource("{projectId}")
+        project_sessions_resource = project_resource.add_resource("sessions")
+        project_sessions_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.get_project_sessions_fn),
+            authorizer=self.auth_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
 
