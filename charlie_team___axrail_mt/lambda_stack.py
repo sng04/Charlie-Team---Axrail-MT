@@ -42,6 +42,7 @@ class LambdaStack(Stack):
             "USERS_TABLE": self.dynamodb_stack.users_table.table_name,
             "PROJECTS_TABLE": self.dynamodb_stack.projects_table.table_name,
             "PROJECT_USERS_TABLE": self.dynamodb_stack.project_users_table.table_name,
+            "SESSIONS_TABLE": self.dynamodb_stack.sessions_table.table_name,
             "POWERTOOLS_SERVICE_NAME": "axrail-auth",
             "LOG_LEVEL": "INFO",
         }
@@ -131,6 +132,37 @@ class LambdaStack(Stack):
         self.get_user_projects_fn = self._create_lambda_function(
             "GetUserProjects",
             "lambdas/Functions/GetUserProjects"
+        )
+        
+        # Session CRUD
+        self.list_sessions_fn = self._create_lambda_function(
+            "ListSessions",
+            "lambdas/Functions/ListSessions"
+        )
+        
+        self.create_session_fn = self._create_lambda_function(
+            "CreateSession",
+            "lambdas/Functions/CreateSession"
+        )
+        
+        self.get_session_fn = self._create_lambda_function(
+            "GetSession",
+            "lambdas/Functions/GetSession"
+        )
+        
+        self.update_session_fn = self._create_lambda_function(
+            "UpdateSession",
+            "lambdas/Functions/UpdateSession"
+        )
+        
+        self.delete_session_fn = self._create_lambda_function(
+            "DeleteSession",
+            "lambdas/Functions/DeleteSession"
+        )
+        
+        self.get_project_sessions_fn = self._create_lambda_function(
+            "GetProjectSessions",
+            "lambdas/Functions/GetProjectSessions"
         )
 
     def _create_exports(self) -> None:
@@ -223,4 +255,46 @@ class LambdaStack(Stack):
             "GetUserProjectsFnArn",
             value=self.get_user_projects_fn.function_arn,
             export_name=f"AXRAIL-GetUserProjectsFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "ListSessionsFnArn",
+            value=self.list_sessions_fn.function_arn,
+            export_name=f"AXRAIL-ListSessionsFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "CreateSessionFnArn",
+            value=self.create_session_fn.function_arn,
+            export_name=f"AXRAIL-CreateSessionFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "GetSessionFnArn",
+            value=self.get_session_fn.function_arn,
+            export_name=f"AXRAIL-GetSessionFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "UpdateSessionFnArn",
+            value=self.update_session_fn.function_arn,
+            export_name=f"AXRAIL-UpdateSessionFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "DeleteSessionFnArn",
+            value=self.delete_session_fn.function_arn,
+            export_name=f"AXRAIL-DeleteSessionFnArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "GetProjectSessionsFnArn",
+            value=self.get_project_sessions_fn.function_arn,
+            export_name=f"AXRAIL-GetProjectSessionsFnArn-{self.env_name}",
         )

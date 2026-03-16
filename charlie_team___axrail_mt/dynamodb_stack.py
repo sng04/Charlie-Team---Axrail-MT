@@ -17,6 +17,7 @@ class DynamoDBStack(Stack):
         self._create_users_table()
         self._create_projects_table()
         self._create_project_users_table()
+        self._create_sessions_table()
         self._create_exports()
 
     def _create_users_table(self) -> None:
@@ -94,6 +95,31 @@ class DynamoDBStack(Stack):
             projection_type=dynamodb.ProjectionType.ALL,
         )
 
+    def _create_sessions_table(self) -> None:
+        removal_policy = RemovalPolicy.DESTROY if self.env_name == "dev" else RemovalPolicy.RETAIN
+        
+        self.sessions_table = dynamodb.Table(
+            self,
+            "SessionsTable",
+            table_name=f"{self.env_name}-Sessions",
+            partition_key=dynamodb.Attribute(
+                name="session_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=removal_policy,
+            point_in_time_recovery=self.env_name != "dev",
+        )
+        
+        self.sessions_table.add_global_secondary_index(
+            index_name="project-index",
+            partition_key=dynamodb.Attribute(
+                name="project_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
     def _create_exports(self) -> None:
         CfnOutput(
             self,
@@ -135,4 +161,18 @@ class DynamoDBStack(Stack):
             "ProjectUsersTableArn",
             value=self.project_users_table.table_arn,
             export_name=f"AXRAIL-ProjectUsersTableArn-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "SessionsTableName",
+            value=self.sessions_table.table_name,
+            export_name=f"AXRAIL-SessionsTableName-{self.env_name}",
+        )
+        
+        CfnOutput(
+            self,
+            "SessionsTableArn",
+            value=self.sessions_table.table_arn,
+            export_name=f"AXRAIL-SessionsTableArn-{self.env_name}",
         )
