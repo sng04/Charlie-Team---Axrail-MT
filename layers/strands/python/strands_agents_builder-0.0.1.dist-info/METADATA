@@ -1,0 +1,38 @@
+Metadata-Version: 2.4
+Name: strands-agents-builder
+Version: 0.0.1
+Summary: Builder for strands agents
+Project-URL: Homepage, https://github.com/yourusername/strands-agents-builder
+Project-URL: Bug Tracker, https://github.com/yourusername/strands-agents-builder/issues
+Author-email: Your Name <your.email@example.com>
+License: Apache-2.0
+License-File: LICENSE
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Requires-Python: >=3.10
+Requires-Dist: strands-agents>=0.0.1
+Description-Content-Type: text/markdown
+
+# strands-agents-builder
+
+Builder for strands agents.
+
+## Installation
+
+```bash
+pip install strands-agents-builder
+```
+
+## Usage
+
+```python
+from strands_agents_builder import main
+
+# Add usage examples here
+```
+
+## License
+
+This project is licensed under the Apache License 2.0 - see the LICENSE file for details.
