@@ -6,6 +6,7 @@ import aws_cdk as cdk
 from charlie_team___axrail_mt.shared_resources_stack import SharedResourcesStack
 from charlie_team___axrail_mt.dynamodb_stack import DynamoDBStack
 from charlie_team___axrail_mt.cognito_stack import CognitoStack
+from charlie_team___axrail_mt.meeting_bot_stack import MeetingBotStack
 from charlie_team___axrail_mt.lambda_stack import LambdaStack
 from charlie_team___axrail_mt.api_services_stack import ApiServicesStack
 from charlie_team___axrail_mt.seed_admin_stack import SeedAdminStack
@@ -43,6 +44,16 @@ cognito_stack = CognitoStack(
     env=env,
 )
 
+meeting_bot_stack = MeetingBotStack(
+    app,
+    f"AXRAIL-MeetingBot-{environment}",
+    environment=environment,
+    transcripts_table_arn=dynamodb_stack.transcripts_table.table_arn,
+    sessions_table_arn=dynamodb_stack.sessions_table.table_arn,
+    projects_table_arn=dynamodb_stack.projects_table.table_arn,
+    env=env,
+)
+
 lambda_stack = LambdaStack(
     app,
     f"AXRAIL-Lambda-{environment}",
@@ -50,6 +61,7 @@ lambda_stack = LambdaStack(
     shared_resources=shared_resources,
     dynamodb_stack=dynamodb_stack,
     cognito_stack=cognito_stack,
+    meeting_bot_stack=meeting_bot_stack,
     env=env,
 )
 
@@ -76,6 +88,9 @@ seed_admin_stack = SeedAdminStack(
 lambda_stack.add_dependency(shared_resources)
 lambda_stack.add_dependency(dynamodb_stack)
 lambda_stack.add_dependency(cognito_stack)
+lambda_stack.add_dependency(meeting_bot_stack)
+
+meeting_bot_stack.add_dependency(dynamodb_stack)
 
 api_services_stack.add_dependency(lambda_stack)
 
