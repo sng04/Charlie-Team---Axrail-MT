@@ -20,6 +20,7 @@ from transcribe_handler import TranscribeStreamingManager
 from config import (
     SESSION_ID,
     PROJECT_ID,
+    CREDENTIAL_ID,
     MEETING_URL,
     GMAIL_EMAIL,
     GMAIL_PASSWORD,
@@ -44,23 +45,34 @@ sessions_table = dynamodb.Table(SESSIONS_TABLE)
 secrets_client = boto3.client("secretsmanager", region_name=AWS_REGION)
 
 
-def get_gmail_credentials(project_id: str) -> tuple:
+def get_gmail_credentials(credential_id: str) -> tuple:
     """
     Get Gmail credentials from Secrets Manager.
 
     Args:
-        project_id: Project ID for secret lookup
+        credential_id: Bot credential ID for secret lookup
 
     Returns:
         tuple: (email, password)
     """
-    secret_name = f"{ENVIRONMENT}/{project_id}/gmail-credentials"
+    secret_name = f"{ENVIRONMENT}/bot-credentials/{credential_id}"
     logger.info(f"Fetching Gmail credentials from: {secret_name}")
 
     try:
         response = secrets_client.get_secret_value(SecretId=secret_name)
         secret = json.loads(response["SecretString"])
-        return secret.get("email", ""), secret.get("password", "")
+
+        dynamodb_client = boto3.resource("dynamodb", region_name=AWS_REGION)
+        bot_credentials_table = dynamodb_client.Table(f"{ENVIRONMENT}-BotCredentials")
+        cred_response = bot_credentials_table.get_item(Key={"credential_id": credential_id})
+
+        if "Item" not in cred_response:
+            raise ValueError(f"Bot credential {credential_id} not found in DynamoDB")
+
+        email = cred_response["Item"].get("email", "")
+        password = secret.get("password", "")
+
+        return email, password
     except Exception as e:
         logger.error(f"Failed to get Gmail credentials: {e}")
         raise
@@ -204,7 +216,6 @@ class MeetingOrchestrator:
         await page.wait_for_load_state("networkidle")
         await asyncio.sleep(5)
 
-        # Dismiss browser warning if present
         try:
             dismiss_btn = page.locator('button:has-text("Dismiss")')
             if await dismiss_btn.count() > 0:
@@ -361,12 +372,16 @@ async def main():
         logger.error("PROJECT_ID must be set")
         sys.exit(1)
 
+    if not CREDENTIAL_ID:
+        logger.error("CREDENTIAL_ID must be set")
+        sys.exit(1)
+
     if not MEETING_URL:
         logger.error("MEETING_URL must be set")
         sys.exit(1)
 
-    # Get Gmail credentials from Secrets Manager
-    gmail_email, gmail_password = get_gmail_credentials(PROJECT_ID)
+    # Get Gmail credentials from Secrets Manager using credential_id
+    gmail_email, gmail_password = get_gmail_credentials(CREDENTIAL_ID)
 
     if not gmail_email or not gmail_password:
         logger.error("Gmail credentials not found in Secrets Manager")

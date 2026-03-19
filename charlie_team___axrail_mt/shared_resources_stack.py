@@ -54,6 +54,14 @@ class SharedResourcesStack(Stack):
             string_value=self.powertools_layer.layer_version_arn,
         )
 
+        self.ses_sender_email_param = ssm.StringParameter(
+            self,
+            "SesSenderEmailParam",
+            parameter_name=f"/axrail/{self.env_name}/ses/sender-email",
+            string_value="richiereubenh@gmail.com",
+            description="SES sender email for bot credential verification",
+        )
+
     def _create_lambda_role(self) -> None:
         self.lambda_role = iam.Role(
             self,
@@ -93,6 +101,25 @@ class SharedResourcesStack(Stack):
                     "dynamodb:Scan",
                 ],
                 resources=["*"],
+            )
+        )
+
+        self.lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "ses:SendEmail",
+                    "ses:SendRawEmail",
+                ],
+                resources=["*"],
+            )
+        )
+
+        self.lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["ssm:GetParameter"],
+                resources=[f"arn:aws:ssm:*:*:parameter/axrail/{self.env_name}/*"],
             )
         )
 

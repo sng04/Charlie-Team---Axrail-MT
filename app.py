@@ -51,6 +51,7 @@ meeting_bot_stack = MeetingBotStack(
     transcripts_table_arn=dynamodb_stack.transcripts_table.table_arn,
     sessions_table_arn=dynamodb_stack.sessions_table.table_arn,
     projects_table_arn=dynamodb_stack.projects_table.table_arn,
+    bot_credentials_table_arn=dynamodb_stack.bot_credentials_table.table_arn,
     env=env,
 )
 

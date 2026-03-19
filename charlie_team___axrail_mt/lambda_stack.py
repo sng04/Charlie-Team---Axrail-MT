@@ -75,9 +75,10 @@ class LambdaStack(Stack):
                     "secretsmanager:CreateSecret",
                     "secretsmanager:PutSecretValue",
                     "secretsmanager:GetSecretValue",
+                    "secretsmanager:DeleteSecret",
                 ],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self.env_name}/*/gmail-credentials-*"
+                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self.env_name}/bot-credentials/*"
                 ],
             )
         )
@@ -92,6 +93,7 @@ class LambdaStack(Stack):
             "PROJECT_USERS_TABLE": self.dynamodb_stack.project_users_table.table_name,
             "SESSIONS_TABLE": self.dynamodb_stack.sessions_table.table_name,
             "TRANSCRIPTS_TABLE": self.dynamodb_stack.transcripts_table.table_name,
+            "BOT_CREDENTIALS_TABLE": self.dynamodb_stack.bot_credentials_table.table_name,
             "ECS_CLUSTER": self.meeting_bot_stack.cluster_arn,
             "ECS_TASK_DEFINITION": self.meeting_bot_stack.task_definition_arn,
             "ECS_SUBNETS": ",".join(self.meeting_bot_stack.private_subnet_ids),
@@ -99,6 +101,8 @@ class LambdaStack(Stack):
             "ENVIRONMENT": self.env_name,
             "POWERTOOLS_SERVICE_NAME": "axrail-api",
             "LOG_LEVEL": "INFO",
+            "SES_SENDER_EMAIL_PARAM": f"/axrail/{self.env_name}/ses/sender-email",
+            "API_ENDPOINT": "https://tavz3lny8c.execute-api.ap-southeast-1.amazonaws.com/dev",
         }
 
     def _create_lambda_function(
@@ -161,11 +165,6 @@ class LambdaStack(Stack):
             "DeleteProject", "lambdas/Functions/DeleteProject"
         )
 
-        # Project Bot Credentials
-        self.set_project_bot_credentials_fn = self._create_lambda_function(
-            "SetProjectBotCredentials", "lambdas/Functions/SetProjectBotCredentials"
-        )
-
         # ProjectUser CRUD
         self.assign_user_to_project_fn = self._create_lambda_function(
             "AssignUserToProject", "lambdas/Functions/AssignUserToProject"
@@ -219,6 +218,31 @@ class LambdaStack(Stack):
 
         self.get_bot_status_fn = self._create_lambda_function(
             "GetBotStatus", "lambdas/Functions/GetBotStatus"
+        )
+
+        # Bot Credentials CRUD
+        self.create_bot_credential_fn = self._create_lambda_function(
+            "CreateBotCredential", "lambdas/Functions/CreateBotCredential"
+        )
+
+        self.list_bot_credentials_fn = self._create_lambda_function(
+            "ListBotCredentials", "lambdas/Functions/ListBotCredentials"
+        )
+
+        self.get_bot_credential_fn = self._create_lambda_function(
+            "GetBotCredential", "lambdas/Functions/GetBotCredential"
+        )
+
+        self.update_bot_credential_fn = self._create_lambda_function(
+            "UpdateBotCredential", "lambdas/Functions/UpdateBotCredential"
+        )
+
+        self.delete_bot_credential_fn = self._create_lambda_function(
+            "DeleteBotCredential", "lambdas/Functions/DeleteBotCredential"
+        )
+
+        self.verify_bot_credential_fn = self._create_lambda_function(
+            "VerifyBotCredential", "lambdas/Functions/VerifyBotCredential"
         )
 
     def _create_exports(self) -> None:
@@ -283,13 +307,6 @@ class LambdaStack(Stack):
             "DeleteProjectFnArn",
             value=self.delete_project_fn.function_arn,
             export_name=f"AXRAIL-DeleteProjectFnArn-{self.env_name}",
-        )
-
-        CfnOutput(
-            self,
-            "SetProjectBotCredentialsFnArn",
-            value=self.set_project_bot_credentials_fn.function_arn,
-            export_name=f"AXRAIL-SetProjectBotCredentialsFnArn-{self.env_name}",
         )
 
         CfnOutput(
@@ -381,4 +398,46 @@ class LambdaStack(Stack):
             "GetBotStatusFnArn",
             value=self.get_bot_status_fn.function_arn,
             export_name=f"AXRAIL-GetBotStatusFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "CreateBotCredentialFnArn",
+            value=self.create_bot_credential_fn.function_arn,
+            export_name=f"AXRAIL-CreateBotCredentialFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "ListBotCredentialsFnArn",
+            value=self.list_bot_credentials_fn.function_arn,
+            export_name=f"AXRAIL-ListBotCredentialsFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "GetBotCredentialFnArn",
+            value=self.get_bot_credential_fn.function_arn,
+            export_name=f"AXRAIL-GetBotCredentialFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "UpdateBotCredentialFnArn",
+            value=self.update_bot_credential_fn.function_arn,
+            export_name=f"AXRAIL-UpdateBotCredentialFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "DeleteBotCredentialFnArn",
+            value=self.delete_bot_credential_fn.function_arn,
+            export_name=f"AXRAIL-DeleteBotCredentialFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "VerifyBotCredentialFnArn",
+            value=self.verify_bot_credential_fn.function_arn,
+            export_name=f"AXRAIL-VerifyBotCredentialFnArn-{self.env_name}",
         )

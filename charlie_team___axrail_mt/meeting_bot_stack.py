@@ -29,6 +29,7 @@ class MeetingBotStack(Stack):
         transcripts_table_arn: str,
         sessions_table_arn: str,
         projects_table_arn: str,
+        bot_credentials_table_arn: str,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -36,6 +37,7 @@ class MeetingBotStack(Stack):
         self._transcripts_table_arn = transcripts_table_arn
         self._sessions_table_arn = sessions_table_arn
         self._projects_table_arn = projects_table_arn
+        self._bot_credentials_table_arn = bot_credentials_table_arn
 
         self._create_vpc()
         self._create_security_group()
@@ -135,7 +137,7 @@ class MeetingBotStack(Stack):
                 effect=iam.Effect.ALLOW,
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self._environment}/*/gmail-credentials-*"
+                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self._environment}/bot-credentials/*"
                 ],
             )
         )
@@ -169,6 +171,7 @@ class MeetingBotStack(Stack):
                     self._transcripts_table_arn,
                     self._sessions_table_arn,
                     self._projects_table_arn,
+                    self._bot_credentials_table_arn,
                 ],
             )
         )
@@ -178,7 +181,7 @@ class MeetingBotStack(Stack):
                 effect=iam.Effect.ALLOW,
                 actions=["secretsmanager:GetSecretValue"],
                 resources=[
-                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self._environment}/*/gmail-credentials-*"
+                    f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self._environment}/bot-credentials/*"
                 ],
             )
         )

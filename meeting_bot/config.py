@@ -11,6 +11,7 @@ import os
 # ==============================================================================
 SESSION_ID = os.environ.get("SESSION_ID", "")
 PROJECT_ID = os.environ.get("PROJECT_ID", "")
+CREDENTIAL_ID = os.environ.get("CREDENTIAL_ID", "")
 MEETING_URL = os.environ.get("MEETING_URL", "")
 
 # ==============================================================================

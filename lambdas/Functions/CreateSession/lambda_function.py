@@ -3,6 +3,7 @@ CreateSession Lambda Function
 
 Creates a new session linked to a project in DynamoDB.
 Automatically triggers Meeting Bot to join the meeting if meeting_link is provided.
+Validates that project has a verified and active bot credential before starting bot.
 """
 
 import json
@@ -24,8 +25,8 @@ ecs_client = boto3.client("ecs")
 
 sessions_table = dynamodb.Table(os.environ.get("SESSIONS_TABLE"))
 projects_table = dynamodb.Table(os.environ.get("PROJECTS_TABLE"))
+bot_credentials_table = dynamodb.Table(os.environ.get("BOT_CREDENTIALS_TABLE"))
 
-# ECS Configuration
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER")
 ECS_TASK_DEFINITION = os.environ.get("ECS_TASK_DEFINITION")
 ECS_SUBNETS = os.environ.get("ECS_SUBNETS", "").split(",")
@@ -53,10 +54,62 @@ def _verify_project_exists(project_id: str) -> dict:
     return response["Item"]
 
 
-def _start_meeting_bot(session_id: str, project_id: str, meeting_link: str) -> str:
+def _get_bot_credential(project: dict) -> dict:
+    """
+    Get and validate bot credential from project.
+
+    Args:
+        project: Project data from DynamoDB
+
+    Returns:
+        Bot credential data
+
+    Raises:
+        BadRequestError: If credential not assigned, not verified, or not active
+    """
+    credential_id = project.get("bot_credential_id")
+    if not credential_id:
+        raise BadRequestError(
+            "Project does not have a bot credential assigned. "
+            "Please assign a verified bot credential to the project first."
+        )
+
+    response = bot_credentials_table.get_item(Key={"credential_id": credential_id})
+    if "Item" not in response:
+        raise BadRequestError(
+            f"Bot credential {credential_id} not found. "
+            "Please assign a valid bot credential to the project."
+        )
+
+    credential = response["Item"]
+
+    if credential.get("verification_status") != "verified":
+        raise BadRequestError(
+            f"Bot credential {credential_id} is not verified. "
+            "Please verify the email before creating a session."
+        )
+
+    if credential.get("available_status") != "active":
+        raise BadRequestError(
+            f"Bot credential {credential_id} is not active. "
+            "Please activate the credential before creating a session."
+        )
+
+    return credential
+
+
+def _start_meeting_bot(
+    session_id: str, project_id: str, credential_id: str, meeting_link: str
+) -> str:
     """
     Start ECS Fargate task for Meeting Bot.
-    
+
+    Args:
+        session_id: Session ID
+        project_id: Project ID
+        credential_id: Bot credential ID for fetching Gmail credentials
+        meeting_link: Google Meet URL
+
     Returns:
         str: Task ARN
     """
@@ -85,6 +138,7 @@ def _start_meeting_bot(session_id: str, project_id: str, meeting_link: str) -> s
                         "environment": [
                             {"name": "SESSION_ID", "value": session_id},
                             {"name": "PROJECT_ID", "value": project_id},
+                            {"name": "CREDENTIAL_ID", "value": credential_id},
                             {"name": "MEETING_URL", "value": meeting_link},
                             {"name": "ENVIRONMENT", "value": ENVIRONMENT},
                         ],
@@ -115,6 +169,8 @@ def lambda_handler(event, context):
 
         project = _verify_project_exists(data["project_id"])
 
+        credential = _get_bot_credential(project)
+
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
 
@@ -132,9 +188,12 @@ def lambda_handler(event, context):
             "updated_at": now,
         }
 
-        # Start Meeting Bot
+        # Start Meeting Bot with credential_id
         task_arn = _start_meeting_bot(
-            session_id, data["project_id"], data["meeting_link"]
+            session_id,
+            data["project_id"],
+            credential["credential_id"],
+            data["meeting_link"],
         )
 
         if task_arn:

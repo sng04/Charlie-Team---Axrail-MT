@@ -39,6 +39,7 @@ class ApiServicesStack(Stack):
         self._create_project_user_routes()
         self._create_session_routes()
         self._create_meeting_bot_routes()
+        self._create_bot_credential_routes()
         self._create_exports()
 
     def _create_api_gateway(self) -> None:
@@ -300,17 +301,6 @@ class ApiServicesStack(Stack):
 
     def _create_meeting_bot_routes(self) -> None:
         """Create Meeting Bot related API routes."""
-        # PUT /projects/{projectId}/bot-credentials - Set bot credentials (admin only)
-        projects_resource = self.api.root.get_resource("projects")
-        project_resource = projects_resource.get_resource("{projectId}")
-        bot_credentials_resource = project_resource.add_resource("bot-credentials")
-        bot_credentials_resource.add_method(
-            "PUT",
-            apigw.LambdaIntegration(self.lambda_stack.set_project_bot_credentials_fn),
-            authorizer=self.admin_authorizer,
-            authorization_type=apigw.AuthorizationType.CUSTOM,
-        )
-
         # GET /sessions/{sessionId}/transcripts - Get session transcripts (authenticated users)
         sessions_resource = self.api.root.get_resource("sessions")
         session_resource = sessions_resource.get_resource("{sessionId}")
@@ -338,6 +328,59 @@ class ApiServicesStack(Stack):
             apigw.LambdaIntegration(self.lambda_stack.get_bot_status_fn),
             authorizer=self.auth_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+    def _create_bot_credential_routes(self) -> None:
+        """Create Bot Credential CRUD API routes."""
+        bot_credentials_resource = self.api.root.add_resource("bot-credentials")
+
+        # GET /bot-credentials - List all bot credentials (admin only)
+        bot_credentials_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.list_bot_credentials_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # POST /bot-credentials - Create bot credential (admin only)
+        bot_credentials_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.create_bot_credential_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        bot_credential_resource = bot_credentials_resource.add_resource("{credentialId}")
+
+        # GET /bot-credentials/{credentialId} - Get single bot credential (admin only)
+        bot_credential_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.get_bot_credential_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # PUT /bot-credentials/{credentialId} - Update bot credential (admin only)
+        bot_credential_resource.add_method(
+            "PUT",
+            apigw.LambdaIntegration(self.lambda_stack.update_bot_credential_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # DELETE /bot-credentials/{credentialId} - Delete bot credential (admin only)
+        bot_credential_resource.add_method(
+            "DELETE",
+            apigw.LambdaIntegration(self.lambda_stack.delete_bot_credential_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # GET /bot-credentials/{credentialId}/verify - Verify email (public)
+        verify_resource = bot_credential_resource.add_resource("verify")
+        verify_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.verify_bot_credential_fn),
         )
 
 
