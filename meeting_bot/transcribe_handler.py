@@ -2,15 +2,15 @@
 Transcribe Handler Module
 
 Handle streaming to Amazon Transcribe and save to DynamoDB.
+Real-time mode: saves each sentence immediately without buffering.
 """
 
 import asyncio
 import logging
 import os
 import uuid
-from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import boto3
 from amazon_transcribe.client import TranscribeStreamingClient
@@ -22,7 +22,6 @@ from config import AWS_REGION, TRANSCRIPTS_TABLE, TRANSCRIBE_LANGUAGE
 
 logger = logging.getLogger(__name__)
 
-BUFFER_TIMEOUT_SECONDS = float(os.environ.get("BUFFER_TIMEOUT", "2.0"))
 ENABLE_SPEAKER_ID = os.environ.get("ENABLE_SPEAKER_ID", "true").lower() == "true"
 
 
@@ -42,7 +41,7 @@ class DynamoDBHandler:
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
     ) -> None:
-        """Save transcript to DynamoDB."""
+        """Save transcript to DynamoDB immediately."""
         if not text.strip():
             return
 
@@ -75,12 +74,12 @@ class DynamoDBHandler:
 class TranscriptDeduplicator:
     """Deduplication to avoid duplicate transcripts."""
 
-    def __init__(self, similarity_threshold: float = 0.8, time_window: float = 1.0):
+    def __init__(self, similarity_threshold: float = 0.9, time_window: float = 0.5):
         self._processed_result_ids: set = set()
-        self._recent_texts: List[Dict] = []
+        self._recent_texts: List[dict] = []
         self._similarity_threshold = similarity_threshold
         self._time_window = time_window
-        self._max_history = 20
+        self._max_history = 10
 
     def is_duplicate(
         self,
@@ -96,23 +95,20 @@ class TranscriptDeduplicator:
 
         text_lower = text.lower().strip()
         for recent in self._recent_texts:
-            similarity = self._calculate_similarity(text_lower, recent["text"].lower())
-            if similarity >= self._similarity_threshold:
-                if start_time and recent.get("end_time"):
-                    time_diff = abs(start_time - recent["end_time"])
-                    if time_diff < self._time_window:
+            if text_lower == recent["text"].lower():
+                logger.debug(f"Skipping exact duplicate: {text[:50]}...")
+                return True
+
+            if start_time and recent.get("end_time"):
+                time_diff = abs(start_time - recent["end_time"])
+                if time_diff < self._time_window:
+                    similarity = self._calculate_similarity(
+                        text_lower, recent["text"].lower()
+                    )
+                    if similarity >= self._similarity_threshold:
                         logger.debug(
                             f"Skipping similar text (sim={similarity:.2f}): {text[:50]}..."
                         )
-                        return True
-
-        for recent in self._recent_texts:
-            recent_lower = recent["text"].lower()
-            if text_lower in recent_lower or recent_lower in text_lower:
-                if start_time and recent.get("end_time"):
-                    time_diff = abs(start_time - recent["end_time"])
-                    if time_diff < self._time_window:
-                        logger.debug(f"Skipping substring text: {text[:50]}...")
                         return True
 
         return False
@@ -127,9 +123,9 @@ class TranscriptDeduplicator:
         """Mark transcript as already processed."""
         if result_id:
             self._processed_result_ids.add(result_id)
-            if len(self._processed_result_ids) > 1000:
+            if len(self._processed_result_ids) > 500:
                 self._processed_result_ids = set(
-                    list(self._processed_result_ids)[-500:]
+                    list(self._processed_result_ids)[-250:]
                 )
 
         self._recent_texts.append(
@@ -156,105 +152,13 @@ class TranscriptDeduplicator:
         return len(intersection) / len(union) if union else 0.0
 
 
-class SpeakerBuffer:
-    """Buffer for collecting transcripts per speaker."""
-
-    def __init__(self, dynamodb_handler: DynamoDBHandler, timeout: float = 2.0):
-        self._dynamodb = dynamodb_handler
-        self._timeout = timeout
-        self._buffers: Dict[str, Dict] = defaultdict(
-            lambda: {
-                "texts": [],
-                "start_time": None,
-                "end_time": None,
-                "last_update": 0,
-            }
-        )
-        self._current_speaker: Optional[str] = None
-        self._segment_count = 0
-        self._deduplicator = TranscriptDeduplicator()
-
-    def add_segment(
-        self,
-        text: str,
-        speaker: Optional[str],
-        start_time: Optional[float],
-        end_time: Optional[float],
-        result_id: Optional[str] = None,
-    ) -> None:
-        """Add a transcript segment with deduplication."""
-        if not text.strip():
-            return
-
-        if self._deduplicator.is_duplicate(result_id, text, start_time, end_time):
-            logger.debug(f"Skipped duplicate: {text[:50]}...")
-            return
-
-        self._deduplicator.mark_processed(result_id, text, start_time, end_time)
-
-        speaker_key = speaker or "unknown"
-        current_time = asyncio.get_event_loop().time()
-        self._segment_count += 1
-
-        if self._current_speaker and speaker_key != self._current_speaker:
-            logger.info(
-                f"Speaker changed from {self._current_speaker} to {speaker_key}, flushing..."
-            )
-            self._flush_speaker(self._current_speaker)
-
-        self._current_speaker = speaker_key
-
-        buf = self._buffers[speaker_key]
-        buf["texts"].append(text.strip())
-        buf["last_update"] = current_time
-
-        if buf["start_time"] is None:
-            buf["start_time"] = start_time
-        buf["end_time"] = end_time
-
-        if self._segment_count >= 5:
-            logger.info(f"Flushing after {self._segment_count} segments...")
-            self._flush_speaker(speaker_key)
-            self._segment_count = 0
-
-    def _flush_speaker(self, speaker: str) -> None:
-        """Flush buffer for a specific speaker."""
-        if speaker not in self._buffers:
-            return
-
-        buf = self._buffers[speaker]
-        if not buf["texts"]:
-            return
-
-        combined_text = " ".join(buf["texts"])
-
-        self._dynamodb.save_transcript(
-            text=combined_text,
-            speaker=speaker if speaker != "unknown" else None,
-            start_time=buf["start_time"],
-            end_time=buf["end_time"],
-        )
-
-        buf["texts"] = []
-        buf["start_time"] = None
-        buf["end_time"] = None
-
-    def check_timeouts(self) -> None:
-        """Flush buffers that have timed out."""
-        current_time = asyncio.get_event_loop().time()
-
-        for speaker, buf in list(self._buffers.items()):
-            if buf["texts"] and (current_time - buf["last_update"]) > self._timeout:
-                self._flush_speaker(speaker)
-
-    def flush_all(self) -> None:
-        """Flush all buffers."""
-        for speaker in list(self._buffers.keys()):
-            self._flush_speaker(speaker)
-
-
 class MeetingTranscriptHandler(TranscriptResultStreamHandler):
-    """Handler for processing transcript events from Transcribe."""
+    """
+    Handler for processing transcript events from Transcribe.
+    
+    Real-time mode: saves each final sentence immediately to DynamoDB
+    without any buffering delay.
+    """
 
     def __init__(
         self,
@@ -263,13 +167,18 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
     ):
         super().__init__(transcript_result_stream)
         self._dynamodb = dynamodb_handler
-        self._buffer = SpeakerBuffer(dynamodb_handler, BUFFER_TIMEOUT_SECONDS)
+        self._deduplicator = TranscriptDeduplicator()
 
     async def handle_transcript_event(self, transcript_event: TranscriptEvent) -> None:
-        """Handle transcript event from Transcribe."""
+        """
+        Handle transcript event from Transcribe.
+        
+        Saves each final (non-partial) result immediately to DynamoDB.
+        """
         results = transcript_event.transcript.results
 
         for result in results:
+            # Skip partial results - only process final sentences
             if result.is_partial:
                 continue
 
@@ -285,18 +194,28 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
             result_id = getattr(result, "result_id", None)
             speaker = self._extract_speaker(alternative)
 
+            # Check for duplicates
+            if self._deduplicator.is_duplicate(
+                result_id, transcript_text, result.start_time, result.end_time
+            ):
+                continue
+
+            # Mark as processed
+            self._deduplicator.mark_processed(
+                result_id, transcript_text, result.start_time, result.end_time
+            )
+
+            speaker_label = f"spk_{speaker}" if speaker else None
             speaker_info = f" [Speaker {speaker}]" if speaker else ""
             logger.info(f"🎤{speaker_info} {transcript_text}")
 
-            self._buffer.add_segment(
+            # Save immediately to DynamoDB - no buffering
+            self._dynamodb.save_transcript(
                 text=transcript_text,
-                speaker=f"spk_{speaker}" if speaker else None,
+                speaker=speaker_label,
                 start_time=result.start_time,
                 end_time=result.end_time,
-                result_id=result_id,
             )
-
-            self._buffer.check_timeouts()
 
     def _extract_speaker(self, alternative) -> Optional[str]:
         """Extract speaker ID from alternative items."""
@@ -310,8 +229,8 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
         return None
 
     def flush_remaining(self) -> None:
-        """Flush remaining buffered transcripts."""
-        self._buffer.flush_all()
+        """No-op since we save immediately without buffering."""
+        pass
 
 
 class TranscribeStreamingManager:
