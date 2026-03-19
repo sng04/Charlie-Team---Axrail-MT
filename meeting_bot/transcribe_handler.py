@@ -3,11 +3,18 @@ Transcribe Handler Module
 
 Handle streaming to Amazon Transcribe and save to DynamoDB.
 Real-time mode: saves each sentence immediately without buffering.
+
+Preprocessing:
+- Filler word removal (um, uh, hm, etc.)
+- Noise pattern filtering (random numbers, repeated chars)
+- Confidence threshold filtering
 """
 
 import asyncio
 import logging
 import os
+import re
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -23,25 +30,116 @@ from config import AWS_REGION, TRANSCRIPTS_TABLE, TRANSCRIBE_LANGUAGE
 logger = logging.getLogger(__name__)
 
 ENABLE_SPEAKER_ID = os.environ.get("ENABLE_SPEAKER_ID", "true").lower() == "true"
+CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.5"))
+
+# Filler words to remove
+FILLER_WORDS = {
+    "um", "uh", "hm", "hmm", "eh", "ah", "er", "erm",
+    "um,", "uh,", "hm,", "hmm,", "eh,", "ah,",
+}
+
+# Noise patterns (regex)
+NOISE_PATTERNS = [
+    r"^[0-9]+$",                   
+    r"^[0-9\s\.]+$",               
+    r"^(.)\1+$",                   
+    r"^(yo\s*)+$",                 
+    r"^(oh\s*)+$",                  
+    r"^[^a-zA-Z]*$",               
+]
+
+
+class TextPreprocessor:
+    """Preprocess transcript text before saving."""
+
+    def __init__(self, confidence_threshold: float = 0.5):
+        self._confidence_threshold = confidence_threshold
+        self._noise_patterns = [re.compile(p, re.IGNORECASE) for p in NOISE_PATTERNS]
+
+    def preprocess(
+        self, text: str, confidence: Optional[float] = None
+    ) -> Optional[str]:
+        """
+        Preprocess transcript text.
+
+        Args:
+            text: Raw transcript text
+            confidence: Average confidence score (0.0-1.0)
+
+        Returns:
+            Cleaned text or None if should be filtered out
+        """
+        if not text:
+            return None
+
+        if confidence is not None and confidence < self._confidence_threshold:
+            logger.debug(f"Filtered low confidence ({confidence:.2f}): {text}")
+            return None
+
+        cleaned = text.strip()
+
+        if cleaned.lower().rstrip(",.!?") in FILLER_WORDS:
+            logger.debug(f"Filtered filler word: {text}")
+            return None
+
+        cleaned = self._remove_edge_fillers(cleaned)
+
+        if self._is_noise(cleaned):
+            logger.debug(f"Filtered noise pattern: {text}")
+            return None
+
+        if not cleaned or len(cleaned.strip()) == 0:
+            return None
+
+        return cleaned
+
+    def _remove_edge_fillers(self, text: str) -> str:
+        """Remove filler words from start and end of text."""
+        words = text.split()
+        if not words:
+            return text
+
+        while words and words[0].lower().rstrip(",.!?") in FILLER_WORDS:
+            words.pop(0)
+
+        while words and words[-1].lower().rstrip(",.!?") in FILLER_WORDS:
+            words.pop()
+
+        return " ".join(words)
+
+    def _is_noise(self, text: str) -> bool:
+        """Check if text matches noise patterns."""
+        for pattern in self._noise_patterns:
+            if pattern.match(text):
+                return True
+        return False
 
 
 class DynamoDBHandler:
-    """Handle saving transcripts to DynamoDB."""
+    """Handle saving transcripts to DynamoDB with async write support."""
 
     def __init__(self, table_name: str, session_id: str):
         self._dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         self._table = self._dynamodb.Table(table_name)
         self._session_id = session_id
+        self._pending_tasks: List[asyncio.Task] = []
+        self._write_count = 0
+        self._total_write_time = 0.0
         logger.info(f"DynamoDB handler initialized for table: {table_name}")
 
-    def save_transcript(
+    def save_transcript_async(
         self,
         text: str,
         speaker: Optional[str] = None,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
+        confidence: Optional[float] = None,
     ) -> None:
-        """Save transcript to DynamoDB immediately."""
+        """
+        Queue transcript for async save to DynamoDB (fire-and-forget).
+        
+        Returns immediately without waiting for DynamoDB response.
+        """
         if not text.strip():
             return
 
@@ -62,13 +160,54 @@ class DynamoDBHandler:
             item["start_time"] = str(round(start_time, 2))
         if end_time is not None:
             item["end_time"] = str(round(end_time, 2))
+        if confidence is not None:
+            item["confidence"] = str(round(confidence, 3))
 
+        task = asyncio.create_task(self._async_put_item(item, text, speaker))
+        self._pending_tasks.append(task)
+        
+        self._cleanup_completed_tasks()
+        
+        speaker_info = f" [{speaker}]" if speaker else ""
+        logger.info(f"� Queued{speaker_info}: {text}")
+
+    async def _async_put_item(
+        self, item: dict, text: str, speaker: Optional[str]
+    ) -> None:
+        """Execute DynamoDB put_item in background."""
         try:
-            self._table.put_item(Item=item)
+            save_start = time.perf_counter()
+            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: self._table.put_item(Item=item))
+            
+            save_duration = (time.perf_counter() - save_start) * 1000
+            self._write_count += 1
+            self._total_write_time += save_duration
+            
             speaker_info = f" [{speaker}]" if speaker else ""
-            logger.info(f"💾 Saved{speaker_info}: {text}")
+            logger.info(f"💾 Saved{speaker_info}: {text} (DDB: {save_duration:.0f}ms)")
+            
         except Exception as e:
-            logger.error(f"Failed to save transcript: {e}")
+            logger.error(f"Failed to save transcript async: {e} - text: {text}")
+
+    def _cleanup_completed_tasks(self) -> None:
+        """Remove completed tasks from pending list."""
+        self._pending_tasks = [t for t in self._pending_tasks if not t.done()]
+
+    async def flush_pending(self) -> None:
+        """Wait for all pending writes to complete."""
+        if self._pending_tasks:
+            logger.info(f"Flushing {len(self._pending_tasks)} pending writes...")
+            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+            self._pending_tasks.clear()
+            
+        if self._write_count > 0:
+            avg_time = self._total_write_time / self._write_count
+            logger.info(
+                f"DynamoDB stats: {self._write_count} writes, "
+                f"avg {avg_time:.0f}ms per write"
+            )
 
 
 class TranscriptDeduplicator:
@@ -152,12 +291,18 @@ class TranscriptDeduplicator:
         return len(intersection) / len(union) if union else 0.0
 
 
+
 class MeetingTranscriptHandler(TranscriptResultStreamHandler):
     """
     Handler for processing transcript events from Transcribe.
     
     Real-time mode: saves each final sentence immediately to DynamoDB
     without any buffering delay.
+    
+    Preprocessing:
+    - Filler word removal
+    - Noise pattern filtering
+    - Confidence threshold filtering
     """
 
     def __init__(
@@ -168,17 +313,17 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
         super().__init__(transcript_result_stream)
         self._dynamodb = dynamodb_handler
         self._deduplicator = TranscriptDeduplicator()
+        self._preprocessor = TextPreprocessor(CONFIDENCE_THRESHOLD)
 
     async def handle_transcript_event(self, transcript_event: TranscriptEvent) -> None:
         """
         Handle transcript event from Transcribe.
         
-        Saves each final (non-partial) result immediately to DynamoDB.
+        Saves each final (non-partial) result immediately to DynamoDB using async write.
         """
         results = transcript_event.transcript.results
 
         for result in results:
-            # Skip partial results - only process final sentences
             if result.is_partial:
                 continue
 
@@ -193,28 +338,33 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
 
             result_id = getattr(result, "result_id", None)
             speaker = self._extract_speaker(alternative)
+            confidence = self._extract_confidence(alternative)
 
-            # Check for duplicates
             if self._deduplicator.is_duplicate(
                 result_id, transcript_text, result.start_time, result.end_time
             ):
                 continue
 
-            # Mark as processed
+            cleaned_text = self._preprocessor.preprocess(transcript_text, confidence)
+            if cleaned_text is None:
+                logger.debug(f"Filtered out: {transcript_text}")
+                continue
+
             self._deduplicator.mark_processed(
                 result_id, transcript_text, result.start_time, result.end_time
             )
 
             speaker_label = f"spk_{speaker}" if speaker else None
             speaker_info = f" [Speaker {speaker}]" if speaker else ""
-            logger.info(f"🎤{speaker_info} {transcript_text}")
+            confidence_info = f" (conf: {confidence:.2f})" if confidence else ""
+            logger.info(f"🎤{speaker_info}{confidence_info} {cleaned_text}")
 
-            # Save immediately to DynamoDB - no buffering
-            self._dynamodb.save_transcript(
-                text=transcript_text,
+            self._dynamodb.save_transcript_async(
+                text=cleaned_text,
                 speaker=speaker_label,
                 start_time=result.start_time,
                 end_time=result.end_time,
+                confidence=confidence,
             )
 
     def _extract_speaker(self, alternative) -> Optional[str]:
@@ -228,9 +378,34 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
 
         return None
 
+    def _extract_confidence(self, alternative) -> Optional[float]:
+        """Extract average confidence score from alternative items."""
+        if not hasattr(alternative, "items") or not alternative.items:
+            return None
+
+        confidences = []
+        for item in alternative.items:
+            if hasattr(item, "confidence") and item.confidence is not None:
+                try:
+                    confidences.append(float(item.confidence))
+                except (ValueError, TypeError):
+                    pass
+
+        if not confidences:
+            return None
+
+        return sum(confidences) / len(confidences)
+
     def flush_remaining(self) -> None:
-        """No-op since we save immediately without buffering."""
-        pass
+        """Flush any pending async writes."""
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.create_task(self._dynamodb.flush_pending())
+            else:
+                loop.run_until_complete(self._dynamodb.flush_pending())
+        except Exception as e:
+            logger.error(f"Error flushing pending writes: {e}")
 
 
 class TranscribeStreamingManager:
@@ -248,6 +423,7 @@ class TranscribeStreamingManager:
         """Start transcription streaming."""
         logger.info(f"Starting transcription for session: {self._session_id}")
         logger.info(f"Speaker identification enabled: {ENABLE_SPEAKER_ID}")
+        logger.info(f"Confidence threshold: {CONFIDENCE_THRESHOLD}")
 
         self._is_running = True
 
@@ -267,6 +443,8 @@ class TranscribeStreamingManager:
             }
 
             if ENABLE_SPEAKER_ID:
+                # Use speaker diarization (voice-based, not channel-based)
+                # Note: Channel identification doesn't work for mixed audio streams
                 stream_params["show_speaker_label"] = True
 
             logger.info(f"Starting Transcribe stream with params: {stream_params}")
@@ -305,13 +483,13 @@ class TranscribeStreamingManager:
             raise
 
     async def stop(self) -> None:
-        """Stop transcription."""
+        """Stop transcription and flush pending writes."""
         logger.info("Stopping transcription...")
 
         self._is_running = False
 
         if self._handler:
-            self._handler.flush_remaining()
+            await self._dynamodb.flush_pending()
 
         await self._audio_capture.stop()
 

@@ -14,8 +14,8 @@ from typing import AsyncGenerator, Optional
 logger = logging.getLogger(__name__)
 
 SAMPLE_RATE = 16000  
-CHANNELS = 1 
-CHUNK_SIZE = 1024 * 2  
+CHANNELS = 1
+CHUNK_SIZE = 1024 * 2
 BYTES_PER_SAMPLE = 2 
 
 AUDIO_SOURCE = os.environ.get("AUDIO_SOURCE", "auto_null.monitor")
