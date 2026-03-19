@@ -13,7 +13,12 @@ wss://.../production?session_id=abc123&agent_id=optional-agent-uuid
 - `session_id` — Associates the connection with a meeting session. Used to scope transcripts, QA pairs, and gap analysis.
 - `agent_id` — Loads a specific agent configuration (role prompt, task prompt, personality). Falls back to the default agent if omitted or not found.
 
-On connect, the server looks up the `project_id` from the session record and caches the agent's system prompt for the duration of the connection.
+On connect, the server:
+1. Looks up the `project_id` from the session record
+2. Builds the agent's system prompt from the agent and personality records
+3. Loads any active skill documents for the agent from the SkillsTable
+4. If skills exist, appends a skill section to the system prompt instructing the agent to search skill documents first before the general knowledge base
+5. Caches all connection data (system prompt, project_id, session_id, agent_id, skills) for the duration of the connection
 
 ## Message Format
 
@@ -35,7 +40,7 @@ Responses are pushed back over the same WebSocket connection as JSON objects wit
 
 ### sendMessage
 
-General-purpose chat with the AI agent. The agent has access to the knowledge base and session transcripts.
+General-purpose chat with the AI agent. The agent has access to the knowledge base, session transcripts, and agent-specific skill documents (if any are attached to the agent).
 
 Request:
 
@@ -380,6 +385,24 @@ Detection methods:
 - `"model"` — Nova Pro classified the text as a question (used when heuristics are inconclusive)
 
 Short texts (< 5 words) are skipped to avoid false positives.
+
+---
+
+## Agent Tools
+
+The StrandsAgent has access to the following tools during WebSocket interactions:
+
+| Tool | Available In | Description |
+|---|---|---|
+| `search_knowledge_base` | sendMessage, detectQuestion, analyzeGaps, retroChat | Vector search against the project knowledge base, filtered by project_id |
+| `search_agent_skills` | sendMessage, detectQuestion, analyzeGaps, endMeeting, retroAnalysis, retroChat | Vector search against agent-specific skill documents, filtered by agent_id and doc_type |
+| `get_session_transcript` | sendMessage, detectQuestion, analyzeGaps, endMeeting, retroAnalysis, retroChat | Retrieve transcript entries for a session |
+| `save_qa_pair` | extractQAPair | Persist a question-answer pair to DynamoDB |
+| `get_session_qa_pairs` | endMeeting, retroAnalysis | Retrieve QA pairs recorded during a session |
+| `save_summary_to_s3` | endMeeting | Save meeting summary markdown to S3 |
+| `get_meeting_summary` | retroAnalysis | Retrieve a previously saved meeting summary |
+
+When an agent has active skill documents, the system prompt instructs the agent to search skill documents first using `search_agent_skills` before falling back to the general knowledge base via `search_knowledge_base`.
 
 ---
 

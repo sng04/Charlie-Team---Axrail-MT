@@ -11,6 +11,7 @@ from helpers import (
     _connection_prompts,
     _get_conn_data,
     _is_session_completed,
+    _load_agent_skills,
     _lookup_project_id,
     _mark_session_active,
     _mark_session_inactive,
@@ -23,6 +24,7 @@ from tools import (
     get_session_transcript,
     save_qa_pair,
     save_summary_to_s3,
+    search_agent_skills,
     search_knowledge_base,
 )
 from windows import _store_suggested_questions
@@ -45,18 +47,44 @@ def _handle_connect(event) -> dict:
 
     project_id = _lookup_project_id(session_id)
     system_prompt, agent_name = build_system_prompt(agent_id)
+
+    # Load active skills for this agent
+    skills = []
+    if agent_id:
+        skills = _load_agent_skills(agent_id)
+
+    # Enrich system prompt with skill information
+    if skills:
+        skill_section = "\n\n## Available Skill Documents\n"
+        skill_section += (
+            "You have access to agent-specific skill documents. "
+            "When answering questions, search these skill documents FIRST "
+            "using the search_agent_skills tool before falling back to the "
+            "general knowledge base.\n\n"
+        )
+        for s in skills:
+            name = s.get("skill_name", "Unknown")
+            desc = s.get("description", "")
+            skill_section += f"- {name}"
+            if desc:
+                skill_section += f": {desc}"
+            skill_section += "\n"
+        system_prompt += skill_section
+
     _connection_prompts[connection_id] = {
         "system_prompt": system_prompt,
         "agent_name": agent_name,
         "project_id": project_id,
         "session_id": session_id,
+        "agent_id": agent_id or "",
+        "skills": skills,
     }
 
     _mark_session_active(session_id, connection_id)
 
     logger.info(
-        "Connected %s (agent_id=%s, session_id=%s, project_id=%s, agent_name=%s)",
-        connection_id, agent_id, session_id, project_id, agent_name,
+        "Connected %s (agent_id=%s, session_id=%s, project_id=%s, agent_name=%s, skills=%d)",
+        connection_id, agent_id, session_id, project_id, agent_name, len(skills),
     )
     return {"statusCode": 200, "body": "Connected"}
 
@@ -91,6 +119,7 @@ def _handle_send_message(body: dict, connection_id: str) -> dict:
     session_id = body.get("session_id", "default-session")
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    agent_id = conn_data.get("agent_id", "")
 
     try:
         model = BedrockModel(
@@ -100,13 +129,15 @@ def _handle_send_message(body: dict, connection_id: str) -> dict:
         agent = Agent(
             model=model,
             system_prompt=conn_data["system_prompt"],
-            tools=[search_knowledge_base, get_session_transcript],
+            tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
         )
         enriched_message = (
-            f"[Context: session_id={session_id}, project_id={project_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}, "
+            f"agent_id={agent_id}]\n"
             f"IMPORTANT: When searching the knowledge base, always use "
             f"project_id='{project_id}' to ensure results are scoped to "
-            f"this project only.\n\n"
+            f"this project only. When searching agent skills, use "
+            f"agent_id='{agent_id}'.\n\n"
             f"{message}"
         )
         result = agent(enriched_message)
@@ -139,6 +170,7 @@ def _handle_detect_question(body: dict, connection_id: str) -> dict:
     session_id = body.get("session_id", "default-session")
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    agent_id = conn_data.get("agent_id", "")
 
     try:
         model = BedrockModel(
@@ -151,12 +183,14 @@ def _handle_detect_question(body: dict, connection_id: str) -> dict:
         agent = Agent(
             model=model,
             system_prompt=system_prompt,
-            tools=[search_knowledge_base, get_session_transcript],
+            tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
         )
         enriched = (
-            f"[Context: session_id={session_id}, project_id={project_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}, "
+            f"agent_id={agent_id}]\n"
             f"IMPORTANT: When searching the knowledge base, always use "
-            f"project_id='{project_id}' to scope results.\n\n"
+            f"project_id='{project_id}' to scope results. "
+            f"When searching agent skills, use agent_id='{agent_id}'.\n\n"
             f"Question: {question}"
         )
         result = agent(enriched)
@@ -238,6 +272,7 @@ def _handle_analyze_gaps(body: dict, connection_id: str) -> dict:
 
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    agent_id = conn_data.get("agent_id", "")
 
     try:
         model = BedrockModel(
@@ -250,12 +285,14 @@ def _handle_analyze_gaps(body: dict, connection_id: str) -> dict:
         agent = Agent(
             model=model,
             system_prompt=system_prompt,
-            tools=[search_knowledge_base, get_session_transcript],
+            tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
         )
         enriched = (
-            f"[Context: session_id={session_id}, project_id={project_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}, "
+            f"agent_id={agent_id}]\n"
             f"IMPORTANT: When searching the knowledge base, always use "
-            f"project_id='{project_id}' to scope results.\n\n"
+            f"project_id='{project_id}' to scope results. "
+            f"When searching agent skills, use agent_id='{agent_id}'.\n\n"
             f"Analyze knowledge gaps for session {session_id}."
         )
         result = agent(enriched)
@@ -297,6 +334,7 @@ def _handle_end_meeting(body: dict, connection_id: str) -> dict:
 
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    agent_id = conn_data.get("agent_id", "")
 
     _post_to_connection(connection_id, {
         "type": "status",
@@ -314,10 +352,11 @@ def _handle_end_meeting(body: dict, connection_id: str) -> dict:
         agent = Agent(
             model=model,
             system_prompt=system_prompt,
-            tools=[get_session_transcript, get_session_qa_pairs, save_summary_to_s3],
+            tools=[get_session_transcript, get_session_qa_pairs, save_summary_to_s3, search_agent_skills],
         )
         enriched = (
-            f"[Context: session_id={session_id}, project_id={project_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}, "
+            f"agent_id={agent_id}]\n"
             f"Generate a meeting summary for session {session_id}."
         )
         result = agent(enriched)
@@ -360,6 +399,7 @@ def _handle_retro_analysis(body: dict, connection_id: str) -> dict:
 
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    agent_id = conn_data.get("agent_id", "")
 
     _post_to_connection(connection_id, {
         "type": "status",
@@ -377,10 +417,11 @@ def _handle_retro_analysis(body: dict, connection_id: str) -> dict:
         agent = Agent(
             model=model,
             system_prompt=system_prompt,
-            tools=[get_session_transcript, get_meeting_summary, get_session_qa_pairs],
+            tools=[get_session_transcript, get_meeting_summary, get_session_qa_pairs, search_agent_skills],
         )
         enriched = (
-            f"[Context: session_id={session_id}, project_id={project_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}, "
+            f"agent_id={agent_id}]\n"
             f"Perform a retrospective analysis for session {session_id}."
         )
         result = agent(enriched)
@@ -440,7 +481,7 @@ def _handle_retro_chat(body: dict, connection_id: str) -> dict:
         agent = Agent(
             model=model,
             system_prompt=retro_system_prompt,
-            tools=[search_knowledge_base, get_session_transcript],
+            tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
         )
         enriched = (
             f"{TASK_PROMPTS['retroChat']}\n\n{message}"

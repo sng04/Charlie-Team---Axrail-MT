@@ -268,6 +268,7 @@ class GMeetAgentStack(Stack):
         self._create_dynamodb_tables()
         self._create_opensearch_domain()
         self._create_kb_bucket()
+        self._create_skills_bucket()
 
     def _create_dynamodb_tables(self) -> None:
         """Create the five DynamoDB tables with GSIs."""
@@ -377,6 +378,22 @@ class GMeetAgentStack(Stack):
             ),
         )
 
+        self.skills_table = dynamodb.Table(
+            self,
+            "SkillsTable",
+            partition_key=dynamodb.Attribute(
+                name="skill_id", type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+        self.skills_table.add_global_secondary_index(
+            index_name="agent-index",
+            partition_key=dynamodb.Attribute(
+                name="agent_id", type=dynamodb.AttributeType.STRING
+            ),
+        )
+
     def _create_opensearch_domain(self) -> None:
         """Create the OpenSearch Service domain for vector storage."""
         self.opensearch_domain = opensearch.Domain(
@@ -406,6 +423,15 @@ class GMeetAgentStack(Stack):
             auto_delete_objects=True,
         )
 
+    def _create_skills_bucket(self) -> None:
+        """Create the S3 bucket for agent skill documents."""
+        self.skills_bucket = s3.Bucket(
+            self,
+            "SkillsBucket",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+        )
+
     # ==================================================================
     # 3. API Services — REST API, CRUD Lambdas, KB pipeline,
     #                   Strands agent, WebSocket API
@@ -416,6 +442,8 @@ class GMeetAgentStack(Stack):
         self._create_rest_api()
         self._create_ingestion_lambda()
         self._create_deletion_lambda()
+        self._create_skill_ingestion_lambda()
+        self._create_skill_deletion_lambda()
         self._create_strands_agent_lambda()
         self._create_gap_scheduler()
         self._create_websocket_api()
@@ -535,12 +563,61 @@ class GMeetAgentStack(Stack):
             )
         )
 
+        # --- Skills Handler ---
+        self.skills_handler = _lambda.Function(
+            self,
+            "SkillsHandler",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("lambda/SkillsCrud"),
+            timeout=Duration.seconds(30),
+            memory_size=256,
+            layers=[self.shared_layer, self.powertools_layer],
+            tracing=_lambda.Tracing.ACTIVE,
+            environment={
+                "SKILLS_TABLE_NAME": self.skills_table.table_name,
+                "AGENTS_TABLE_NAME": self.agents_table.table_name,
+                "SKILLS_BUCKET_NAME": self.skills_bucket.bucket_name,
+            },
+        )
+        self.skills_handler.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "dynamodb:GetItem",
+                    "dynamodb:PutItem",
+                    "dynamodb:UpdateItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Scan",
+                ],
+                resources=[self.skills_table.table_arn],
+            )
+        )
+        self.skills_handler.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:Query"],
+                resources=[self.skills_table.table_arn + "/index/agent-index"],
+            )
+        )
+        self.skills_handler.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:GetItem"],
+                resources=[self.agents_table.table_arn],
+            )
+        )
+        self.skills_handler.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["s3:PutObject", "s3:GetObject", "s3:DeleteObject"],
+                resources=[self.skills_bucket.bucket_arn + "/*"],
+            )
+        )
+
         # --- Route integrations ---
         agents_integration = apigw.LambdaIntegration(self.agents_handler)
         personalities_integration = apigw.LambdaIntegration(
             self.personalities_handler
         )
         qa_pairs_integration = apigw.LambdaIntegration(self.qa_pairs_handler)
+        skills_integration = apigw.LambdaIntegration(self.skills_handler)
 
         agents_resource = self.rest_api.root.add_resource("agents")
         agents_resource.add_method("GET", agents_integration)
@@ -568,6 +645,15 @@ class GMeetAgentStack(Stack):
         qa_pair_id_resource = qa_pairs_resource.add_resource("{qaPairId}")
         qa_pair_id_resource.add_method("GET", qa_pairs_integration)
         qa_pair_id_resource.add_method("DELETE", qa_pairs_integration)
+
+        skills_resource = self.rest_api.root.add_resource("skills")
+        skills_resource.add_method("GET", skills_integration)
+        skills_resource.add_method("POST", skills_integration)
+
+        skill_id_resource = skills_resource.add_resource("{skillId}")
+        skill_id_resource.add_method("GET", skills_integration)
+        skill_id_resource.add_method("PUT", skills_integration)
+        skill_id_resource.add_method("DELETE", skills_integration)
 
         CfnOutput(
             self,
@@ -662,6 +748,98 @@ class GMeetAgentStack(Stack):
             s3.NotificationKeyFilter(suffix=".md"),
         )
 
+    def _create_skill_ingestion_lambda(self) -> None:
+        """Create the skill ingestion Lambda and wire Skills Bucket OBJECT_CREATED."""
+        self.skill_ingestion_function = _lambda.Function(
+            self,
+            "SkillIngestionFunction",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("lambda/SkillIngestion"),
+            timeout=Duration.seconds(300),
+            memory_size=512,
+            layers=[self.opensearch_layer, self.pypdf2_layer, self.powertools_layer],
+            tracing=_lambda.Tracing.ACTIVE,
+            environment={
+                "OPENSEARCH_ENDPOINT": self.opensearch_domain.domain_endpoint,
+                "INDEX_NAME": "knowledge-vectors",
+                "BEDROCK_REGION": "us-east-1",
+                "SKILLS_TABLE_NAME": self.skills_table.table_name,
+            },
+        )
+        self.skill_ingestion_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["bedrock:InvokeModel"],
+                resources=[
+                    "arn:aws:bedrock:us-east-1::foundation-model/"
+                    "amazon.titan-embed-text-v2:0"
+                ],
+            )
+        )
+        self.skill_ingestion_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "es:ESHttpPost",
+                    "es:ESHttpPut",
+                    "es:ESHttpGet",
+                    "es:ESHttpHead",
+                ],
+                resources=[self.opensearch_domain.domain_arn + "/*"],
+            )
+        )
+        self.skills_bucket.grant_read(self.skill_ingestion_function)
+        self.skill_ingestion_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:UpdateItem"],
+                resources=[self.skills_table.table_arn],
+            )
+        )
+        self.skills_bucket.add_event_notification(
+            s3.EventType.OBJECT_CREATED,
+            s3n.LambdaDestination(self.skill_ingestion_function),
+            s3.NotificationKeyFilter(suffix=".pdf"),
+        )
+        self.skills_bucket.add_event_notification(
+            s3.EventType.OBJECT_CREATED,
+            s3n.LambdaDestination(self.skill_ingestion_function),
+            s3.NotificationKeyFilter(suffix=".md"),
+        )
+
+    def _create_skill_deletion_lambda(self) -> None:
+        """Create the skill deletion Lambda and wire Skills Bucket OBJECT_REMOVED."""
+        self.skill_deletion_function = _lambda.Function(
+            self,
+            "SkillDeletionFunction",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("lambda/SkillDeletion"),
+            timeout=Duration.seconds(60),
+            memory_size=256,
+            layers=[self.opensearch_layer, self.powertools_layer],
+            tracing=_lambda.Tracing.ACTIVE,
+            environment={
+                "OPENSEARCH_ENDPOINT": self.opensearch_domain.domain_endpoint,
+                "INDEX_NAME": "knowledge-vectors",
+            },
+        )
+        self.skill_deletion_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["es:ESHttpGet", "es:ESHttpPost", "es:ESHttpDelete"],
+                resources=[self.opensearch_domain.domain_arn + "/*"],
+            )
+        )
+        self.skills_bucket.grant_read(self.skill_deletion_function)
+        self.skills_bucket.add_event_notification(
+            s3.EventType.OBJECT_REMOVED,
+            s3n.LambdaDestination(self.skill_deletion_function),
+            s3.NotificationKeyFilter(suffix=".pdf"),
+        )
+        self.skills_bucket.add_event_notification(
+            s3.EventType.OBJECT_REMOVED,
+            s3n.LambdaDestination(self.skill_deletion_function),
+            s3.NotificationKeyFilter(suffix=".md"),
+        )
+
     def _create_strands_agent_lambda(self) -> None:
         """Create the Strands agent Lambda with tools and permissions."""
         self.agent_function = _lambda.Function(
@@ -682,6 +860,7 @@ class GMeetAgentStack(Stack):
                 "QA_PAIRS_TABLE_NAME": self.qa_pairs_table.table_name,
                 "KB_BUCKET_NAME": self.kb_bucket.bucket_name,
                 "SUGGESTED_QUESTIONS_TABLE_NAME": self.suggested_questions_table.table_name,
+                "SKILLS_TABLE_NAME": self.skills_table.table_name,
                 "OPENSEARCH_ENDPOINT": self.opensearch_domain.domain_endpoint,
                 "INDEX_NAME": "knowledge-vectors",
                 "BEDROCK_REGION": "us-east-1",
@@ -766,6 +945,14 @@ class GMeetAgentStack(Stack):
                 resources=[
                     self.suggested_questions_table.table_arn,
                     self.suggested_questions_table.table_arn + "/index/session-index",
+                ],
+            )
+        )
+        self.agent_function.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["dynamodb:Query"],
+                resources=[
+                    self.skills_table.table_arn + "/index/agent-index",
                 ],
             )
         )

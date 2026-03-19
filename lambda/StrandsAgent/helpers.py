@@ -12,6 +12,7 @@ from constants import (
     DEFAULT_PERSONALITY_PROMPT,
     PERSONALITIES_TABLE_NAME,
     SESSIONS_TABLE_NAME,
+    SKILLS_TABLE_NAME,
     WEBSOCKET_ENDPOINT,
 )
 
@@ -79,6 +80,29 @@ def _load_personality(personality_id: str) -> str | None:
     except Exception:
         logger.exception("Failed to load personality %s", personality_id)
         return None
+
+
+def _load_agent_skills(agent_id: str) -> list:
+    """Load active skills for an agent from SkillsTable.
+
+    Queries the agent-index GSI filtered by status="active".
+    Returns an empty list on failure or if no skills exist.
+    """
+    if not agent_id or not SKILLS_TABLE_NAME:
+        return []
+    try:
+        from boto3.dynamodb.conditions import Attr, Key
+
+        table = _get_dynamodb().Table(SKILLS_TABLE_NAME)
+        resp = table.query(
+            IndexName="agent-index",
+            KeyConditionExpression=Key("agent_id").eq(agent_id),
+            FilterExpression=Attr("status").eq("active"),
+        )
+        return resp.get("Items", [])
+    except Exception:
+        logger.exception("Failed to load skills for agent %s", agent_id)
+        return []
 
 
 def build_system_prompt(agent_id: str | None = None) -> tuple[str, str]:

@@ -243,6 +243,140 @@ DELETE /qa-pairs/{qaPairId}
 
 ---
 
+## Skills
+
+Skill documents are agent-specific knowledge files (PDF or Markdown) that are uploaded, ingested into OpenSearch, and used by the agent during conversations. The upload flow uses pre-signed S3 URLs to avoid Lambda payload limits.
+
+### List Skills
+
+```
+GET /skills?agent_id={agentId}&page=1&limit=20
+```
+
+Query parameters:
+- `agent_id` (required) — The agent to list skills for
+- `page` — Page number (default: 1)
+- `limit` — Items per page (default: 20, max: 100)
+
+Returns `400` if `agent_id` is not provided.
+
+Response `data`:
+
+```json
+{
+  "items": [
+    {
+      "skill_id": "uuid",
+      "agent_id": "uuid",
+      "skill_name": "Product Pricing Guide",
+      "description": "Detailed pricing tiers and discount policies",
+      "s3_key": "{agent_id}/{skill_id}/pricing-guide.pdf",
+      "file_type": "pdf",
+      "status": "active",
+      "createdAt": "2025-01-15T10:00:00Z",
+      "updatedAt": "2025-01-15T10:02:00Z"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 3,
+    "total_pages": 1
+  }
+}
+```
+
+The `status` field tracks the ingestion lifecycle:
+- `"pending"` — File uploaded, ingestion not yet complete
+- `"active"` — Ingestion succeeded, skill vectors are searchable
+- `"failed"` — Ingestion failed (check CloudWatch logs for details)
+
+### Get Skill
+
+```
+GET /skills/{skillId}
+```
+
+Returns a single skill object in `data`. Returns `404` if not found.
+
+### Create Skill
+
+```
+POST /skills
+```
+
+Request body:
+
+```json
+{
+  "agent_id": "existing-agent-uuid",
+  "skill_name": "Product Pricing Guide",
+  "file_name": "pricing-guide.pdf",
+  "description": "Detailed pricing tiers and discount policies",
+  "idempotencyToken": "optional-unique-token"
+}
+```
+
+Required fields: `agent_id`, `skill_name`, `file_name`
+
+Returns `400` if the referenced `agent_id` does not exist.
+
+Response `data`:
+
+```json
+{
+  "skill": {
+    "skill_id": "uuid",
+    "agent_id": "uuid",
+    "skill_name": "Product Pricing Guide",
+    "description": "Detailed pricing tiers and discount policies",
+    "s3_key": "{agent_id}/{skill_id}/pricing-guide.pdf",
+    "file_type": "pdf",
+    "status": "pending",
+    "createdAt": "2025-01-15T10:00:00Z",
+    "updatedAt": "2025-01-15T10:00:00Z"
+  },
+  "upload_url": "https://s3.amazonaws.com/...?X-Amz-Signature=..."
+}
+```
+
+The `upload_url` is a pre-signed S3 PUT URL valid for 15 minutes. Upload the file directly:
+
+```bash
+curl -X PUT -T pricing-guide.pdf "$UPLOAD_URL"
+```
+
+After upload, the SkillIngestion Lambda is triggered automatically via S3 event notification. The skill status transitions from `"pending"` to `"active"` on success or `"failed"` on error.
+
+### Update Skill
+
+```
+PUT /skills/{skillId}
+```
+
+Request body — only `skill_name` and `description` can be updated:
+
+```json
+{
+  "skill_name": "Updated Pricing Guide",
+  "description": "Updated description"
+}
+```
+
+Returns `400` if no valid update fields are provided. Returns `404` if not found.
+
+### Delete Skill
+
+```
+DELETE /skills/{skillId}
+```
+
+Deletes the DynamoDB record and the S3 object. The S3 OBJECT_REMOVED event triggers the SkillDeletion Lambda, which removes the associated vectors from OpenSearch.
+
+Returns `404` if not found.
+
+---
+
 ## Error Codes
 
 | Code | Meaning |

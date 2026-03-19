@@ -21,6 +21,7 @@ BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 TRANSCRIPTS_TABLE_NAME = os.environ.get("TRANSCRIPTS_TABLE_NAME", "")
 QA_PAIRS_TABLE_NAME = os.environ.get("QA_PAIRS_TABLE_NAME", "")
 KB_BUCKET_NAME = os.environ.get("KB_BUCKET_NAME", "")
+SKILLS_TABLE_NAME = os.environ.get("SKILLS_TABLE_NAME", "")
 
 _os_client = None
 _bedrock_client = None
@@ -82,6 +83,14 @@ def _get_s3_client():
     if _s3_client is None:
         _s3_client = boto3.client("s3")
     return _s3_client
+
+
+def _get_skills_table():
+    """Return a cached DynamoDB Table resource for skills."""
+    global _dynamodb
+    if _dynamodb is None:
+        _dynamodb = boto3.resource("dynamodb")
+    return _dynamodb.Table(SKILLS_TABLE_NAME)
 
 
 def _generate_embedding(text: str) -> list:
@@ -302,3 +311,50 @@ def get_meeting_summary(session_id: str, project_id: str) -> str:
     except Exception as exc:
         logger.exception("Failed to retrieve meeting summary from S3")
         return f"Error retrieving meeting summary: {exc}"
+
+
+@tool
+def search_agent_skills(query: str, agent_id: str) -> str:
+    """Search skill documents attached to a specific agent.
+
+    Args:
+        query: The search query to find relevant skill content.
+        agent_id: The agent ID to filter skill documents by.
+
+    Returns:
+        Formatted search results from the agent's skill documents.
+    """
+    try:
+        embedding = _generate_embedding(query)
+        search_body = {
+            "size": 5,
+            "query": {
+                "bool": {
+                    "must": [
+                        {"knn": {"embedding": {"vector": embedding, "k": 5}}}
+                    ],
+                    "filter": [
+                        {"term": {"agent_id": agent_id}},
+                        {"term": {"doc_type": "agent_skill"}},
+                    ],
+                }
+            },
+        }
+        results = _get_os_client().search(index=INDEX_NAME, body=search_body)
+        hits = results["hits"]["hits"]
+        if not hits:
+            return "No relevant skill documents found for this agent."
+
+        formatted = []
+        for i, hit in enumerate(hits, 1):
+            src = hit["_source"]
+            score = hit["_score"]
+            text = src.get("text", "")
+            source_file = src.get("source_file", "unknown")
+            formatted.append(
+                f"[{i}] (score: {score:.4f}, source: {source_file})\n{text}"
+            )
+        return "\n\n".join(formatted)
+    except Exception as exc:
+        logger.exception("Agent skills search failed")
+        return f"Error searching agent skills: {exc}"

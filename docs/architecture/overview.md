@@ -19,6 +19,7 @@ graph TB
         AGENTS[AgentsCrud]
         PERSONALITIES[PersonalitiesCrud]
         QAPAIRS[QAPairsCrud]
+        SKILLS[SkillsCrud]
     end
 
     subgraph "Core Agent Lambda"
@@ -28,13 +29,16 @@ graph TB
     subgraph "Event-Driven Lambdas"
         INGEST[Ingestion]
         DELETE[Deletion]
+        SKILLINGEST[SkillIngestion]
+        SKILLDELETE[SkillDeletion]
         GAPSCHED[GapScheduler]
     end
 
     subgraph "Data Stores"
-        DDB[(DynamoDB<br/>7 Tables)]
+        DDB[(DynamoDB<br/>8 Tables)]
         OS[(OpenSearch<br/>knowledge-vectors)]
         S3[(S3<br/>KB Bucket)]
+        S3SKILLS[(S3<br/>Skills Bucket)]
     end
 
     subgraph "AI Services (us-east-1)"
@@ -48,16 +52,21 @@ graph TB
     REST --> AGENTS
     REST --> PERSONALITIES
     REST --> QAPAIRS
+    REST --> SKILLS
 
     WS --> STRANDS
 
     S3 -- "OBJECT_CREATED (.pdf/.md)" --> INGEST
     S3 -- "OBJECT_REMOVED (.pdf/.md)" --> DELETE
+    S3SKILLS -- "OBJECT_CREATED (.pdf/.md)" --> SKILLINGEST
+    S3SKILLS -- "OBJECT_REMOVED (.pdf/.md)" --> SKILLDELETE
     GAPSCHED -- "EventBridge (2 min)" --> STRANDS
 
     AGENTS --> DDB
     PERSONALITIES --> DDB
     QAPAIRS --> DDB
+    SKILLS --> DDB
+    SKILLS --> S3SKILLS
     STRANDS --> DDB
     STRANDS --> OS
     STRANDS --> S3
@@ -66,6 +75,10 @@ graph TB
     INGEST --> TITAN
     INGEST --> OS
     DELETE --> OS
+    SKILLINGEST --> TITAN
+    SKILLINGEST --> OS
+    SKILLINGEST --> DDB
+    SKILLDELETE --> OS
     GAPSCHED --> DDB
 ```
 
@@ -76,9 +89,12 @@ graph TB
 | AgentsCrud | Python 3.11 | REST API | CRUD for agent configurations |
 | PersonalitiesCrud | Python 3.11 | REST API | CRUD for personality prompts |
 | QAPairsCrud | Python 3.11 | REST API | Read/delete QA pairs |
-| StrandsAgent | Python 3.11 | WebSocket API | AI agent with task routing, transcript processing, question detection |
-| Ingestion | Python 3.11 | S3 OBJECT_CREATED | PDF/Markdown text extraction, chunking, embedding, OpenSearch indexing |
-| Deletion | Python 3.11 | S3 OBJECT_REMOVED | Remove OpenSearch vectors when source file is deleted |
+| SkillsCrud | Python 3.11 | REST API | CRUD for agent skill documents, pre-signed URL upload |
+| StrandsAgent | Python 3.11 | WebSocket API | AI agent with task routing, transcript processing, question detection, skill search |
+| Ingestion | Python 3.11 | S3 OBJECT_CREATED (KB Bucket) | PDF/Markdown text extraction, chunking, embedding, OpenSearch indexing |
+| Deletion | Python 3.11 | S3 OBJECT_REMOVED (KB Bucket) | Remove OpenSearch vectors when source file is deleted |
+| SkillIngestion | Python 3.11 | S3 OBJECT_CREATED (Skills Bucket) | Skill document text extraction, chunking, embedding, OpenSearch indexing with agent_id, status update |
+| SkillDeletion | Python 3.11 | S3 OBJECT_REMOVED (Skills Bucket) | Remove skill vectors from OpenSearch (filtered by doc_type) |
 | GapScheduler | Python 3.11 | EventBridge (every 2 min) | Trigger gap analysis for active sessions with new transcript data |
 
 ## Data Model
@@ -147,7 +163,20 @@ erDiagram
         string project_id PK
     }
 
+    SkillsTable {
+        string skill_id PK
+        string agent_id GSI
+        string skill_name
+        string description
+        string s3_key
+        string file_type
+        string status
+        string createdAt
+        string updatedAt
+    }
+
     AgentsTable ||--o| PersonalitiesTable : "personality_id"
+    AgentsTable ||--o{ SkillsTable : "agent_id"
     SessionsTable ||--o{ TranscriptsTable : "session_id"
     SessionsTable ||--o{ QAPairsTable : "session_id"
     SessionsTable ||--o{ SuggestedQuestionsTable : "session_id"

@@ -24,7 +24,9 @@ Tests:
 
 Usage:
     pip3 install websocket-client requests certifi
-    python3 test_all_endpoints.py
+    python3 test_all_endpoints.py            # normal (compact output)
+    python3 test_all_endpoints.py --verbose   # print full response payloads
+    python3 test_all_endpoints.py -v          # same as --verbose
 """
 
 import json
@@ -44,11 +46,13 @@ import websocket
 REST_URL = "https://p4wa5y4vye.execute-api.ap-southeast-1.amazonaws.com/prod"
 WS_URL = "wss://ao35uwn4rh.execute-api.ap-southeast-1.amazonaws.com/production"
 WS_TIMEOUT = 90  # seconds — Bedrock calls can be slow
+VERBOSE = False  # Set True (or pass --verbose) to print full response payloads
 
 PASS = "\033[92m✓ PASS\033[0m"
 FAIL = "\033[91m✗ FAIL\033[0m"
 INFO = "\033[94mℹ INFO\033[0m"
 WARN = "\033[93m⚠ WARN\033[0m"
+VERBOSE_TAG = "\033[95m⤷ RESP\033[0m"
 
 results = []  # (name, passed, detail)
 
@@ -63,27 +67,46 @@ def record(name: str, passed: bool, detail: str = ""):
     results.append((name, passed, detail))
 
 
+def vprint(label: str, data):
+    """Print full response payload when VERBOSE is enabled."""
+    if not VERBOSE:
+        return
+    formatted = json.dumps(data, indent=2, default=str) if isinstance(data, (dict, list)) else str(data)
+    for line in formatted.splitlines():
+        print(f"    {VERBOSE_TAG}  [{label}] {line}")
+
+
 def rest_get(path, params=None):
-    return requests.get(f"{REST_URL}{path}", params=params, timeout=30)
+    r = requests.get(f"{REST_URL}{path}", params=params, timeout=30)
+    vprint(f"GET {path}", r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text)
+    return r
 
 
 def rest_post(path, body):
-    return requests.post(f"{REST_URL}{path}", json=body, timeout=30)
+    r = requests.post(f"{REST_URL}{path}", json=body, timeout=30)
+    vprint(f"POST {path}", r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text)
+    return r
 
 
 def rest_put(path, body):
-    return requests.put(f"{REST_URL}{path}", json=body, timeout=30)
+    r = requests.put(f"{REST_URL}{path}", json=body, timeout=30)
+    vprint(f"PUT {path}", r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text)
+    return r
 
 
 def rest_delete(path):
-    return requests.delete(f"{REST_URL}{path}", timeout=30)
+    r = requests.delete(f"{REST_URL}{path}", timeout=30)
+    vprint(f"DELETE {path}", r.json() if r.headers.get("content-type", "").startswith("application/json") else r.text)
+    return r
 
 
 def ws_send_and_recv(ws, payload: dict) -> dict:
     """Send a JSON payload over WebSocket and wait for a response."""
     ws.send(json.dumps(payload))
     raw = ws.recv()
-    return json.loads(raw)
+    resp = json.loads(raw)
+    vprint(f"WS {payload.get('action', '?')}", resp)
+    return resp
 
 
 def ws_recv_until(ws, target_type: str, max_messages: int = 20) -> dict | None:
@@ -109,7 +132,9 @@ def ws_recv_all(ws, timeout_per_msg: float = 5.0, max_messages: int = 30) -> lis
     for _ in range(max_messages):
         try:
             raw = ws.recv()
-            messages.append(json.loads(raw))
+            msg = json.loads(raw)
+            vprint(f"WS recv", msg)
+            messages.append(msg)
         except websocket.WebSocketTimeoutException:
             break
         except Exception:
@@ -310,8 +335,10 @@ def test_websocket_actions():
             "session_id": session_id,
         }))
         resp = json.loads(ws.recv())
+        vprint("WS endMeeting", resp)
         if resp.get("type") == "status":
             resp = json.loads(ws.recv())
+            vprint("WS endMeeting", resp)
         ok = resp.get("type") in ("meetingSummary", "error")
         record("endMeeting", ok, f"type={resp.get('type')}")
     except Exception as e:
@@ -339,8 +366,10 @@ def test_retro_actions(session_id: str):
             "session_id": session_id,
         }))
         resp = json.loads(ws.recv())
+        vprint("WS retroAnalysis", resp)
         if resp.get("type") == "status":
             resp = json.loads(ws.recv())
+            vprint("WS retroAnalysis", resp)
         ok = resp.get("type") in ("retroFeedback", "error")
         detail = resp.get("type")
         if resp.get("type") == "error":
@@ -1157,6 +1186,97 @@ def test_process_transcript_edge_cases():
 # Cleanup
 # ---------------------------------------------------------------------------
 
+def test_skills_crud(agent_id: str):
+    """Test the full skills CRUD lifecycle including pre-signed URL upload."""
+    print("\n── Skills CRUD ──")
+
+    if not agent_id:
+        record("Skills CRUD", False, "skipped — no agent_id")
+        return None
+
+    # 1. Create skill
+    body = {
+        "agent_id": agent_id,
+        "skill_name": f"TestSkill-{uuid.uuid4().hex[:8]}",
+        "file_name": "test-skill.md",
+        "description": "A test skill for integration testing",
+    }
+    r = rest_post("/skills", body)
+    data = r.json().get("data", {})
+    skill = data.get("skill", {})
+    upload_url = data.get("upload_url", "")
+    skill_id = skill.get("skill_id", "")
+    record(
+        "Create skill",
+        r.status_code == 200 and skill_id and upload_url,
+        f"id={skill_id}, status={skill.get('status')}",
+    )
+
+    if not skill_id:
+        return None
+
+    # 2. Upload test file via pre-signed URL
+    test_content = (
+        "# Test Skill Document\n\n"
+        "This is a test skill document for integration testing.\n\n"
+        "## Key Points\n\n"
+        "- Point one about the skill\n"
+        "- Point two about the skill\n"
+        "- Point three about the skill\n"
+    )
+    upload_r = requests.put(upload_url, data=test_content.encode("utf-8"), timeout=30)
+    record("Upload file via pre-signed URL", upload_r.status_code == 200, f"status={upload_r.status_code}")
+
+    # 3. Poll for ingestion completion
+    print(f"  {INFO}  Polling skill status (waiting for ingestion)...")
+    max_wait = 60
+    start = time.time()
+    final_status = "pending"
+    while time.time() - start < max_wait:
+        sr = rest_get(f"/skills/{skill_id}")
+        sdata = sr.json().get("data", {})
+        final_status = sdata.get("status", "pending")
+        if final_status in ("active", "failed"):
+            break
+        time.sleep(5)
+    record("Skill ingestion", final_status == "active", f"status={final_status}")
+
+    # 4. List skills for agent
+    r = rest_get("/skills", params={"agent_id": agent_id})
+    items = r.json().get("data", {}).get("items", [])
+    pagination = r.json().get("data", {}).get("pagination", {})
+    found = any(s.get("skill_id") == skill_id for s in items)
+    record("List skills for agent", r.status_code == 200 and found, f"total={pagination.get('total', 0)}")
+
+    # 5. Get single skill
+    r = rest_get(f"/skills/{skill_id}")
+    record("Get skill", r.status_code == 200 and r.json().get("data", {}).get("skill_id") == skill_id)
+
+    # 6. Update skill
+    r = rest_put(f"/skills/{skill_id}", {"skill_name": "UpdatedTestSkill"})
+    updated_name = r.json().get("data", {}).get("skill_name", "")
+    record("Update skill", r.status_code == 200 and updated_name == "UpdatedTestSkill")
+
+    # 7. Error cases
+    r = rest_get("/skills")
+    record("List skills without agent_id → 400", r.status_code == 400)
+
+    r = rest_post("/skills", {"agent_id": "non-existent-id", "skill_name": "X", "file_name": "x.md"})
+    record("Create skill with bad agent_id → 400", r.status_code == 400)
+
+    r = rest_get(f"/skills/non-existent-id")
+    record("Get non-existent skill → 404", r.status_code == 404)
+
+    # 8. Delete skill
+    r = rest_delete(f"/skills/{skill_id}")
+    record("Delete skill", r.status_code == 200)
+
+    r = rest_get(f"/skills/{skill_id}")
+    record("Get deleted skill → 404", r.status_code == 404)
+
+    return skill_id
+
+
 def cleanup(agent_id, personality_id, qa_pair_id):
     print("\n── Cleanup ──")
 
@@ -1178,8 +1298,14 @@ def cleanup(agent_id, personality_id, qa_pair_id):
 # ---------------------------------------------------------------------------
 
 def main():
+    global VERBOSE
+    if "--verbose" in sys.argv or "-v" in sys.argv:
+        VERBOSE = True
+
     print("=" * 60)
     print("  GMeet Agent — End-to-End Test Suite")
+    if VERBOSE:
+        print("  (verbose mode ON — full response payloads will be printed)")
     print("=" * 60)
 
     # REST API tests
@@ -1194,6 +1320,9 @@ def main():
 
     # QA Pairs REST test
     qa_pair_id = test_qa_pairs_crud(session_id)
+
+    # Skills CRUD test
+    test_skills_crud(agent_id)
 
     # Retro mode tests
     test_retro_actions(session_id)

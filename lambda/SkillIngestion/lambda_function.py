@@ -1,15 +1,16 @@
 """
-Ingestion Lambda handler.
+Skill Ingestion Lambda handler.
 
-Triggered by S3 events when a .pdf file is uploaded to the knowledge base
-bucket. Downloads the PDF, extracts text with PyPDF2, chunks the text,
-generates embeddings via Bedrock Titan in us-east-1, and indexes vectors
-into the OpenSearch ``knowledge-vectors`` index.
+Triggered by S3 OBJECT_CREATED events on the Skills Bucket. Extracts text
+from skill documents (.pdf, .md), chunks, embeds via Bedrock Titan, and
+indexes vectors into the knowledge-vectors OpenSearch index with
+doc_type="agent_skill" and the associated agent_id.
 """
 
 import json
 import os
 import time
+from datetime import datetime
 from io import BytesIO
 
 import boto3
@@ -23,17 +24,11 @@ tracer = Tracer()
 
 OPENSEARCH_ENDPOINT = os.environ.get("OPENSEARCH_ENDPOINT", "")
 INDEX_NAME = os.environ.get("INDEX_NAME", "knowledge-vectors")
-PROJECT_ID = os.environ.get("PROJECT_ID", "default-project")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
+SKILLS_TABLE_NAME = os.environ.get("SKILLS_TABLE_NAME", "")
 
 MAX_RETRIES = 3
 INITIAL_BACKOFF = 1  # seconds
-
-# TODO(pending-other-developer): Per-project S3 bucket routing depends on
-# the Projects table CRUD being completed. Once projects have their own S3
-# buckets, the S3 event notifications should be configured per-bucket.
-# Until then, files are expected in the shared KB bucket with the key
-# format: {project_id}/{filename}.pdf
 
 
 # ------------------------------------------------------------------
@@ -41,24 +36,8 @@ INITIAL_BACKOFF = 1  # seconds
 # ------------------------------------------------------------------
 
 
-def _extract_project_id(key: str) -> str:
-    """Extract project_id from S3 key prefix.
-
-    Expected key format: ``{project_id}/{filename}.pdf``
-    Falls back to the ``PROJECT_ID`` env var when no prefix exists.
-    """
-    parts = key.split("/")
-    if len(parts) > 1 and parts[0]:
-        return parts[0]
-    return PROJECT_ID
-
-
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> list:
-    """Split *text* into overlapping chunks.
-
-    Returns a list of strings where each chunk has at most *chunk_size*
-    characters and consecutive chunks share *overlap* characters.
-    """
+    """Split *text* into overlapping chunks."""
     chunks = []
     start = 0
     while start < len(text):
@@ -108,37 +87,6 @@ def _retry_with_backoff(func, *args, **kwargs):
             )
             time.sleep(wait)
     raise last_exc
-
-
-def ensure_index_exists(client: OpenSearch) -> None:
-    """Create the knowledge-vectors index if it does not already exist."""
-    if client.indices.exists(index=INDEX_NAME):
-        return
-
-    index_body = {
-        "settings": {"index": {"knn": True}},
-        "mappings": {
-            "properties": {
-                "embedding": {
-                    "type": "knn_vector",
-                    "dimension": 1024,
-                    "method": {
-                        "name": "hnsw",
-                        "space_type": "cosinesimil",
-                        "engine": "nmslib",
-                    },
-                },
-                "text": {"type": "text"},
-                "project_id": {"type": "keyword"},
-                "doc_type": {"type": "keyword"},
-                "agent_id": {"type": "keyword"},
-                "source_file": {"type": "keyword"},
-                "chunk_index": {"type": "integer"},
-            }
-        },
-    }
-    client.indices.create(index=INDEX_NAME, body=index_body)
-    logger.info("Created index", extra={"index": INDEX_NAME})
 
 
 @tracer.capture_method
@@ -192,15 +140,29 @@ def _extract_text_from_file(s3_client, bucket: str, key: str) -> str:
     return text
 
 
-def _determine_doc_type(key: str) -> str:
-    """Determine the doc_type based on the S3 key path.
+def _parse_skill_key(key: str) -> tuple:
+    """Parse agent_id, skill_id, and filename from S3 key.
 
-    Files under a ``/summaries/`` path segment are ``meeting_summary``.
-    All other files are ``user_upload``.
+    Expected format: {agent_id}/{skill_id}/{filename}
     """
-    if "/summaries/" in key:
-        return "meeting_summary"
-    return "user_upload"
+    parts = key.split("/")
+    if len(parts) < 3:
+        raise ValueError(f"Invalid skill S3 key format: {key}")
+    return parts[0], parts[1], "/".join(parts[2:])
+
+
+def _update_skill_status(skill_id: str, status: str) -> None:
+    """Update the skill record status in SkillsTable."""
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table(SKILLS_TABLE_NAME)
+    now = datetime.utcnow().isoformat() + "Z"
+    table.update_item(
+        Key={"skill_id": skill_id},
+        UpdateExpression="SET #status = :status, updatedAt = :ts",
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={":status": status, ":ts": now},
+    )
+    logger.info("Updated skill status", extra={"skill_id": skill_id, "status": status})
 
 
 # ------------------------------------------------------------------
@@ -210,49 +172,57 @@ def _determine_doc_type(key: str) -> str:
 
 @tracer.capture_lambda_handler
 def lambda_handler(event, context):
-    """Process S3 event: extract PDF text, embed, and index."""
+    """Process S3 event: extract skill text, embed, and index."""
     s3_client = boto3.client("s3")
     bedrock_client = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
     os_client = _get_opensearch_client()
 
-    ensure_index_exists(os_client)
-
     for record in event.get("Records", []):
         bucket = record["s3"]["bucket"]["name"]
         key = record["s3"]["object"]["key"]
-        logger.info("Processing S3 object", extra={"bucket": bucket, "key": key})
+        logger.info("Processing skill upload", extra={"bucket": bucket, "key": key})
+
+        try:
+            agent_id, skill_id, filename = _parse_skill_key(key)
+        except ValueError:
+            logger.error("Invalid S3 key format", extra={"key": key})
+            continue
 
         try:
             text = _extract_text_from_file(s3_client, bucket, key)
 
             if not text.strip():
                 logger.warning("No text extracted", extra={"key": key})
+                _update_skill_status(skill_id, "failed")
                 continue
 
             chunks = chunk_text(text)
-            source_file = key.split("/")[-1]
-            project_id = _extract_project_id(key)
-            doc_type = _determine_doc_type(key)
 
             for idx, chunk in enumerate(chunks):
                 embedding = _generate_embedding(bedrock_client, chunk)
                 document = {
                     "embedding": embedding,
                     "text": chunk,
-                    "project_id": project_id,
-                    "doc_type": doc_type,
-                    "source_file": source_file,
+                    "project_id": agent_id,
+                    "doc_type": "agent_skill",
+                    "agent_id": agent_id,
+                    "source_file": filename,
                     "chunk_index": idx,
                 }
                 _index_document(os_client, document)
 
+            _update_skill_status(skill_id, "active")
             logger.info(
-                "Indexed chunks",
-                extra={"chunk_count": len(chunks), "key": key, "index": INDEX_NAME},
+                "Skill ingestion complete",
+                extra={"skill_id": skill_id, "chunks": len(chunks)},
             )
 
         except Exception:
-            logger.exception("Failed to process S3 object", extra={"bucket": bucket, "key": key})
+            logger.exception("Skill ingestion failed", extra={"key": key})
+            try:
+                _update_skill_status(skill_id, "failed")
+            except Exception:
+                logger.exception("Failed to update skill status to failed")
             raise
 
-    return {"statusCode": 200, "body": "Ingestion complete"}
+    return {"statusCode": 200, "body": "Skill ingestion complete"}
