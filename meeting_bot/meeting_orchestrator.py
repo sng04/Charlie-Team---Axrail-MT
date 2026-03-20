@@ -49,7 +49,6 @@ sessions_table = dynamodb.Table(SESSIONS_TABLE)
 sqs_client = boto3.client("sqs", region_name=AWS_REGION)
 secrets_client = boto3.client("secretsmanager", region_name=AWS_REGION)
 
-# Bot pool table (only used in warm pool mode)
 bot_pool_table = dynamodb.Table(BOT_POOL_TABLE) if BOT_POOL_TABLE else None
 
 
@@ -98,9 +97,12 @@ def update_session_status(session_id: str, status: str, task_arn: str = None, co
         sessions_table.update_item(
             Key={"session_id": session_id},
             UpdateExpression=update_expr,
+            ConditionExpression="attribute_exists(session_id)",
             ExpressionAttributeValues=expr_values,
         )
         logger.info(f"Updated session {session_id} status to: {status}")
+    except sessions_table.meta.client.exceptions.ConditionalCheckFailedException:
+        logger.warning(f"Session {session_id} not found, skipping status update")
     except Exception as e:
         logger.error(f"Failed to update session status: {e}")
 
@@ -142,6 +144,7 @@ class BotPoolManager:
             bot_pool_table.update_item(
                 Key={"container_id": self._container_id},
                 UpdateExpression="SET #status = :status, current_session_id = :sid, last_heartbeat = :hb",
+                ConditionExpression="attribute_exists(container_id)",
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={
                     ":status": "busy",
@@ -149,6 +152,8 @@ class BotPoolManager:
                     ":hb": datetime.now(timezone.utc).isoformat(),
                 },
             )
+        except bot_pool_table.meta.client.exceptions.ConditionalCheckFailedException:
+            logger.warning(f"Container {self._container_id} not found in pool")
         except Exception as e:
             logger.error(f"Failed to set busy status: {e}")
 
@@ -162,6 +167,7 @@ class BotPoolManager:
             bot_pool_table.update_item(
                 Key={"container_id": self._container_id},
                 UpdateExpression="SET #status = :status, current_session_id = :sid, last_heartbeat = :hb",
+                ConditionExpression="attribute_exists(container_id)",
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={
                     ":status": "idle",
@@ -169,6 +175,8 @@ class BotPoolManager:
                     ":hb": datetime.now(timezone.utc).isoformat(),
                 },
             )
+        except bot_pool_table.meta.client.exceptions.ConditionalCheckFailedException:
+            logger.warning(f"Container {self._container_id} not found in pool")
         except Exception as e:
             logger.error(f"Failed to set idle status: {e}")
 
@@ -181,12 +189,15 @@ class BotPoolManager:
             bot_pool_table.update_item(
                 Key={"container_id": self._container_id},
                 UpdateExpression="SET last_heartbeat = :hb, #ttl = :ttl",
+                ConditionExpression="attribute_exists(container_id)",
                 ExpressionAttributeNames={"#ttl": "ttl"},
                 ExpressionAttributeValues={
                     ":hb": datetime.now(timezone.utc).isoformat(),
                     ":ttl": int(time.time()) + 86400,
                 },
             )
+        except bot_pool_table.meta.client.exceptions.ConditionalCheckFailedException:
+            logger.warning(f"Container {self._container_id} not found in pool, skipping heartbeat")
         except Exception as e:
             logger.error(f"Failed to update heartbeat: {e}")
 

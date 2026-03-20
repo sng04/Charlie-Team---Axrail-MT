@@ -154,7 +154,6 @@ def _send_to_warm_pool(
             "MessageBody": json.dumps(message),
         }
 
-        # Only add MessageGroupId for FIFO queues
         if ".fifo" in SQS_QUEUE_URL:
             send_params["MessageGroupId"] = credential_id
 
@@ -211,6 +210,7 @@ def _start_meeting_bot(
                             {"name": "CREDENTIAL_ID", "value": credential_id},
                             {"name": "MEETING_URL", "value": meeting_link},
                             {"name": "ENVIRONMENT", "value": ENVIRONMENT},
+                            {"name": "WARM_POOL_MODE", "value": "false"},
                         ],
                     }
                 ]

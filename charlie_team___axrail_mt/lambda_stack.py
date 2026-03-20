@@ -142,6 +142,20 @@ class LambdaStack(Stack):
                 ],
             )
         )
+
+        self.lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["ecs:ListTasks"],
+                resources=["*"],
+                conditions={
+                    "ArnEquals": {
+                        "ecs:cluster": self.meeting_bot_stack.cluster.cluster_arn
+                    }
+                },
+            )
+        )
+        
         self.lambda_role.add_to_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,

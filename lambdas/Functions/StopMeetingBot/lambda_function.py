@@ -60,6 +60,7 @@ def _signal_warm_container_to_stop(session: dict) -> bool:
         sessions_table.update_item(
             Key={"session_id": session_id},
             UpdateExpression="SET bot_status = :status, updated_at = :updated_at, stop_requested = :stop",
+            ConditionExpression="attribute_exists(session_id)",
             ExpressionAttributeValues={
                 ":status": "stopping",
                 ":updated_at": datetime.now(timezone.utc).isoformat(),
@@ -73,8 +74,11 @@ def _signal_warm_container_to_stop(session: dict) -> bool:
                 bot_pool_table.update_item(
                     Key={"container_id": container_id},
                     UpdateExpression="SET stop_current_session = :stop",
+                    ConditionExpression="attribute_exists(container_id)",
                     ExpressionAttributeValues={":stop": True},
                 )
+            except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+                logger.warning(f"Container {container_id} not found in BotPool")
             except Exception as e:
                 logger.warning(f"Could not update BotPool: {e}")
 
@@ -104,14 +108,18 @@ def _stop_ecs_task(task_arn: str) -> bool:
 
 def _update_session_status(session_id: str, status: str) -> None:
     """Update session bot_status."""
-    sessions_table.update_item(
-        Key={"session_id": session_id},
-        UpdateExpression="SET bot_status = :status, updated_at = :updated_at",
-        ExpressionAttributeValues={
-            ":status": status,
-            ":updated_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    try:
+        sessions_table.update_item(
+            Key={"session_id": session_id},
+            UpdateExpression="SET bot_status = :status, updated_at = :updated_at",
+            ConditionExpression="attribute_exists(session_id)",
+            ExpressionAttributeValues={
+                ":status": status,
+                ":updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
+        logger.warning(f"Session {session_id} not found, skipping status update")
 
 
 @tracer.capture_lambda_handler

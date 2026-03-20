@@ -3,6 +3,7 @@ StartWarmPool Lambda Function
 
 Starts warm pool ECS tasks for specified bot credentials.
 Can be triggered manually or by EventBridge schedule.
+Checks running ECS tasks to prevent duplicate containers.
 """
 
 import json
@@ -54,7 +55,7 @@ def _get_active_credentials() -> list:
 
 
 def _get_idle_containers_for_credential(credential_id: str) -> int:
-    """Count idle containers for a credential."""
+    """Count idle containers for a credential from DynamoDB."""
     if not bot_pool_table.table_name:
         return 0
 
@@ -71,6 +72,48 @@ def _get_idle_containers_for_credential(credential_id: str) -> int:
         return len(response.get("Items", []))
     except Exception as e:
         logger.warning(f"Error counting idle containers: {e}")
+        return 0
+
+
+def _count_running_tasks_for_credential(credential_id: str) -> int:
+    """
+    Count running ECS tasks for a specific credential.
+    This is more reliable than checking DynamoDB because tasks may not have registered yet.
+    """
+    if not ECS_CLUSTER:
+        return 0
+
+    try:
+        task_arns = []
+        paginator = ecs_client.get_paginator("list_tasks")
+        for page in paginator.paginate(cluster=ECS_CLUSTER, desiredStatus="RUNNING"):
+            task_arns.extend(page.get("taskArns", []))
+
+        if not task_arns:
+            return 0
+
+        count = 0
+        for i in range(0, len(task_arns), 100):
+            batch = task_arns[i:i + 100]
+            response = ecs_client.describe_tasks(cluster=ECS_CLUSTER, tasks=batch)
+
+            for task in response.get("tasks", []):
+                for container in task.get("overrides", {}).get("containerOverrides", []):
+                    for env in container.get("environment", []):
+                        if env.get("name") == "CREDENTIAL_ID" and env.get("value") == credential_id:
+                            is_warm_pool = any(
+                                e.get("name") == "WARM_POOL_MODE" and e.get("value") == "true"
+                                for e in container.get("environment", [])
+                            )
+                            if is_warm_pool:
+                                count += 1
+                            break
+
+        logger.info(f"Found {count} running warm pool tasks for credential {credential_id}")
+        return count
+
+    except Exception as e:
+        logger.error(f"Error counting running tasks: {e}")
         return 0
 
 
@@ -160,15 +203,16 @@ def lambda_handler(event, context):
             # Use override if provided, otherwise use credential's warm_pool_size (default: 1)
             target_containers = int(override_containers if override_containers else credential.get("warm_pool_size", 1))
             
-            # Check how many idle containers already exist
-            existing_idle = _get_idle_containers_for_credential(credential_id)
-            needed = max(0, target_containers - existing_idle)
+            # Check how many ECS tasks are already running for this credential
+            # This is more reliable than checking DynamoDB because tasks may not have registered yet
+            existing_running = _count_running_tasks_for_credential(credential_id)
+            needed = max(0, target_containers - existing_running)
             
             if needed == 0:
-                logger.info(f"Credential {credential_id} already has {existing_idle} idle containers (target: {target_containers})")
+                logger.info(f"Credential {credential_id} already has {existing_running} running tasks (target: {target_containers})")
                 continue
             
-            logger.info(f"Starting {needed} containers for {credential_id} (target: {target_containers}, existing: {existing_idle})")
+            logger.info(f"Starting {needed} containers for {credential_id} (target: {target_containers}, running: {existing_running})")
             
             for _ in range(needed):
                 task_arn = _start_warm_container(credential_id)
