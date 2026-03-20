@@ -1,13 +1,14 @@
 from aws_cdk import (
     Stack,
     Duration,
+    CustomResource,
     aws_lambda as _lambda,
     aws_iam as iam,
+    custom_resources as cr,
     CfnOutput,
 )
 from constructs import Construct
 
-from charlie_team___axrail_mt.shared_resources_stack import SharedResourcesStack
 from charlie_team___axrail_mt.dynamodb_stack import DynamoDBStack
 from charlie_team___axrail_mt.cognito_stack import CognitoStack
 from charlie_team___axrail_mt.meeting_bot_stack import MeetingBotStack
@@ -21,28 +22,113 @@ class LambdaStack(Stack):
         construct_id: str,
         *,
         env_name: str,
-        shared_resources: SharedResourcesStack,
         dynamodb_stack: DynamoDBStack,
         cognito_stack: CognitoStack,
         meeting_bot_stack: MeetingBotStack,
+        ses_sender_email: str,
+        admin_email: str,
+        admin_temp_password: str,
         **kwargs
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         self.env_name = env_name
-        self.shared_resources = shared_resources
         self.dynamodb_stack = dynamodb_stack
         self.cognito_stack = cognito_stack
         self.meeting_bot_stack = meeting_bot_stack
+        self.ses_sender_email = ses_sender_email
+        self.admin_email = admin_email
+        self.admin_temp_password = admin_temp_password
 
+        self._create_lambda_layers()
+        self._create_lambda_role()
+        self._grant_dynamodb_permissions()
+        self._grant_cognito_permissions()
+        self._grant_ses_permissions()
         self._grant_ecs_permissions()
+        self._grant_sqs_permissions()
         self._grant_secrets_permissions()
+        self._grant_cloudformation_permissions()
         self._create_lambda_functions()
+        self._create_seed_admin()
         self._create_exports()
 
+    def _create_lambda_layers(self) -> None:
+        """Create Lambda layers for shared code."""
+        self.shared_layer = _lambda.LayerVersion(
+            self,
+            "SharedLayer",
+            layer_version_name=f"AXRAIL-SharedLayer-{self.env_name}",
+            code=_lambda.Code.from_asset("lambdas/Layers/SharedLayer"),
+            compatible_runtimes=[_lambda.Runtime.PYTHON_3_11],
+            description="Shared utilities for Lambda functions",
+        )
+
+        self.powertools_layer = _lambda.LayerVersion(
+            self,
+            "PowertoolsLayer",
+            layer_version_name=f"AXRAIL-PowertoolsLayer-{self.env_name}",
+            code=_lambda.Code.from_asset("lambdas/Layers/PowertoolsLayer"),
+            compatible_runtimes=[_lambda.Runtime.PYTHON_3_11],
+            description="AWS Lambda Powertools for logging and tracing",
+        )
+
+    def _create_lambda_role(self) -> None:
+        """Create Lambda execution role with basic permissions."""
+        self.lambda_role = iam.Role(
+            self,
+            "LambdaRole",
+            role_name=f"AXRAIL-LambdaRole-{self.env_name}",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole"),
+                iam.ManagedPolicy.from_aws_managed_policy_name("AWSXRayDaemonWriteAccess"),
+            ],
+        )
+
+    def _grant_dynamodb_permissions(self) -> None:
+        """Grant DynamoDB permissions using CDK grant methods for least privilege."""
+        self.dynamodb_stack.users_table.grant_read_write_data(self.lambda_role)
+        self.dynamodb_stack.projects_table.grant_read_write_data(self.lambda_role)
+        self.dynamodb_stack.project_users_table.grant_read_write_data(self.lambda_role)
+        self.dynamodb_stack.sessions_table.grant_read_write_data(self.lambda_role)
+        self.dynamodb_stack.transcripts_table.grant_read_write_data(self.lambda_role)
+        self.dynamodb_stack.bot_credentials_table.grant_read_write_data(self.lambda_role)
+        self.dynamodb_stack.bot_pool_table.grant_read_write_data(self.lambda_role)
+
+    def _grant_cognito_permissions(self) -> None:
+        """Grant Cognito permissions with specific User Pool ARN."""
+        self.lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "cognito-idp:InitiateAuth",
+                    "cognito-idp:RespondToAuthChallenge",
+                    "cognito-idp:GetUser",
+                    "cognito-idp:AdminCreateUser",
+                    "cognito-idp:AdminAddUserToGroup",
+                    "cognito-idp:AdminListGroupsForUser",
+                ],
+                resources=[self.cognito_stack.user_pool.user_pool_arn],
+            )
+        )
+
+    def _grant_ses_permissions(self) -> None:
+        """Grant SES permissions for sending verification emails."""
+        self.lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "ses:SendEmail",
+                    "ses:SendRawEmail",
+                ],
+                resources=[f"arn:aws:ses:{self.region}:{self.account}:identity/*"],
+            )
+        )
+
     def _grant_ecs_permissions(self) -> None:
-        """Grant ECS permissions to Lambda role for starting/stopping tasks."""
-        self.shared_resources.lambda_role.add_to_policy(
+        """Grant ECS permissions for starting/stopping meeting bot tasks."""
+        self.lambda_role.add_to_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
                 actions=[
@@ -50,10 +136,13 @@ class LambdaStack(Stack):
                     "ecs:StopTask",
                     "ecs:DescribeTasks",
                 ],
-                resources=["*"],
+                resources=[
+                    self.meeting_bot_stack.task_definition_arn,
+                    f"arn:aws:ecs:{self.region}:{self.account}:task/{self.meeting_bot_stack.cluster.cluster_name}/*",
+                ],
             )
         )
-        self.shared_resources.lambda_role.add_to_policy(
+        self.lambda_role.add_to_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
                 actions=["iam:PassRole"],
@@ -65,8 +154,10 @@ class LambdaStack(Stack):
                 },
             )
         )
-        # SQS permissions for warm pool
-        self.shared_resources.lambda_role.add_to_policy(
+
+    def _grant_sqs_permissions(self) -> None:
+        """Grant SQS permissions for warm pool queue."""
+        self.lambda_role.add_to_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
                 actions=[
@@ -79,7 +170,7 @@ class LambdaStack(Stack):
 
     def _grant_secrets_permissions(self) -> None:
         """Grant Secrets Manager permissions to Lambda role."""
-        self.shared_resources.lambda_role.add_to_policy(
+        self.lambda_role.add_to_policy(
             iam.PolicyStatement(
                 effect=iam.Effect.ALLOW,
                 actions=[
@@ -91,6 +182,16 @@ class LambdaStack(Stack):
                 resources=[
                     f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self.env_name}/bot-credentials/*"
                 ],
+            )
+        )
+
+    def _grant_cloudformation_permissions(self) -> None:
+        """Grant CloudFormation permissions to read exports."""
+        self.lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["cloudformation:ListExports"],
+                resources=["*"],
             )
         )
 
@@ -115,8 +216,7 @@ class LambdaStack(Stack):
             "ENVIRONMENT": self.env_name,
             "POWERTOOLS_SERVICE_NAME": "axrail-api",
             "LOG_LEVEL": "INFO",
-            "SES_SENDER_EMAIL_PARAM": f"/axrail/{self.env_name}/ses/sender-email",
-            "API_ENDPOINT": "https://tavz3lny8c.execute-api.ap-southeast-1.amazonaws.com/dev",
+            "SES_SENDER_EMAIL": self.ses_sender_email,
         }
 
     def _create_lambda_function(
@@ -129,10 +229,10 @@ class LambdaStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_11,
             handler="lambda_function.lambda_handler",
             code=_lambda.Code.from_asset(handler_path),
-            role=self.shared_resources.lambda_role,
+            role=self.lambda_role,
             layers=[
-                self.shared_resources.shared_layer,
-                self.shared_resources.powertools_layer,
+                self.shared_layer,
+                self.powertools_layer,
             ],
             environment=self._get_lambda_environment(),
             timeout=Duration.seconds(timeout),
@@ -262,6 +362,72 @@ class LambdaStack(Stack):
         # Warm Pool Management
         self.start_warm_pool_fn = self._create_lambda_function(
             "StartWarmPool", "lambdas/Functions/StartWarmPool", timeout=120
+        )
+
+    def _create_seed_admin(self) -> None:
+        """Create SeedAdmin Lambda and Custom Resource for initial admin user."""
+        self.seed_admin_role = iam.Role(
+            self,
+            "SeedAdminRole",
+            role_name=f"AXRAIL-SeedAdminRole-{self.env_name}",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole"),
+            ],
+        )
+
+        self.seed_admin_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "cognito-idp:AdminCreateUser",
+                    "cognito-idp:AdminAddUserToGroup",
+                    "cognito-idp:AdminGetUser",
+                ],
+                resources=[self.cognito_stack.user_pool.user_pool_arn],
+            )
+        )
+
+        self.seed_admin_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["dynamodb:PutItem"],
+                resources=[self.dynamodb_stack.users_table.table_arn],
+            )
+        )
+
+        self.seed_admin_fn = _lambda.Function(
+            self,
+            "SeedAdminFunction",
+            function_name=f"AXRAIL-SeedAdmin-{self.env_name}",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("lambdas/Functions/SeedAdmin"),
+            role=self.seed_admin_role,
+            environment={
+                "USER_POOL_ID": self.cognito_stack.user_pool.user_pool_id,
+                "DYNAMODB_TABLE": self.dynamodb_stack.users_table.table_name,
+                "ADMIN_EMAIL": self.admin_email,
+                "ADMIN_TEMP_PASSWORD": self.admin_temp_password,
+            },
+            timeout=Duration.seconds(60),
+            memory_size=256,
+        )
+
+        provider = cr.Provider(
+            self,
+            "SeedAdminProvider",
+            on_event_handler=self.seed_admin_fn,
+        )
+
+        self.seed_admin_resource = CustomResource(
+            self,
+            "SeedAdminResource",
+            service_token=provider.service_token,
+            properties={
+                "AdminEmail": self.admin_email,
+                "Timestamp": "v4",
+            },
         )
 
     def _create_exports(self) -> None:
@@ -466,4 +632,40 @@ class LambdaStack(Stack):
             "StartWarmPoolFnArn",
             value=self.start_warm_pool_fn.function_arn,
             export_name=f"AXRAIL-StartWarmPoolFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "AdminEmail",
+            value=self.admin_email,
+            export_name=f"AXRAIL-AdminEmail-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "AdminTempPassword",
+            value=self.admin_temp_password,
+            export_name=f"AXRAIL-AdminTempPassword-{self.env_name}",
+            description="Temporary password for admin. Change immediately after first login.",
+        )
+
+        CfnOutput(
+            self,
+            "LambdaRoleArn",
+            value=self.lambda_role.role_arn,
+            export_name=f"AXRAIL-LambdaRoleArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "SharedLayerArn",
+            value=self.shared_layer.layer_version_arn,
+            export_name=f"AXRAIL-SharedLayerArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "PowertoolsLayerArn",
+            value=self.powertools_layer.layer_version_arn,
+            export_name=f"AXRAIL-PowertoolsLayerArn-{self.env_name}",
         )

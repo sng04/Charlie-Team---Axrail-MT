@@ -23,34 +23,47 @@ tracer = Tracer()
 dynamodb = boto3.resource("dynamodb")
 secrets_client = boto3.client("secretsmanager")
 ses_client = boto3.client("ses")
-ssm_client = boto3.client("ssm")
 
 table_name = os.environ.get("BOT_CREDENTIALS_TABLE")
 table = dynamodb.Table(table_name)
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
-API_ENDPOINT = os.environ.get("API_ENDPOINT", "")
-SES_SENDER_EMAIL_PARAM = os.environ.get("SES_SENDER_EMAIL_PARAM", "")
+SES_SENDER_EMAIL = os.environ.get("SES_SENDER_EMAIL", "")
 
-_ses_sender_email_cache = None
+_api_endpoint_cache = None
 
 
-def _get_ses_sender_email() -> str:
-    """Get SES sender email from SSM Parameter Store with caching."""
-    global _ses_sender_email_cache
-    if _ses_sender_email_cache:
-        return _ses_sender_email_cache
+def _get_api_endpoint() -> str:
+    """Get API endpoint from environment or CloudFormation exports."""
+    global _api_endpoint_cache
+    if _api_endpoint_cache:
+        return _api_endpoint_cache
 
-    if not SES_SENDER_EMAIL_PARAM:
-        logger.warning("SES_SENDER_EMAIL_PARAM not configured")
-        return ""
+    # Check if explicitly set in environment
+    api_endpoint = os.environ.get("API_ENDPOINT", "")
+    if api_endpoint:
+        _api_endpoint_cache = api_endpoint if api_endpoint.endswith("/") else f"{api_endpoint}/"
+        return _api_endpoint_cache
 
+    # Lookup from CloudFormation exports
     try:
-        response = ssm_client.get_parameter(Name=SES_SENDER_EMAIL_PARAM)
-        _ses_sender_email_cache = response["Parameter"]["Value"]
-        return _ses_sender_email_cache
+        cf_client = boto3.client("cloudformation")
+        export_name = f"AXRAIL-ApiEndpoint-{ENVIRONMENT}"
+        
+        paginator = cf_client.get_paginator("list_exports")
+        for page in paginator.paginate():
+            for export in page["Exports"]:
+                if export["Name"] == export_name:
+                    _api_endpoint_cache = export["Value"]
+                    if not _api_endpoint_cache.endswith("/"):
+                        _api_endpoint_cache += "/"
+                    logger.info(f"Found API endpoint from CloudFormation: {_api_endpoint_cache}")
+                    return _api_endpoint_cache
+        
+        logger.warning(f"CloudFormation export {export_name} not found")
+        return ""
     except Exception as e:
-        logger.error(f"Failed to get SES sender email from SSM: {e}")
+        logger.error(f"Failed to get API endpoint from CloudFormation: {e}")
         return ""
 
 
@@ -110,16 +123,16 @@ def _generate_verification_token() -> str:
 
 def _send_verification_email(email: str, credential_id: str, token: str) -> None:
     """Send verification email via SES."""
-    if not API_ENDPOINT:
+    api_endpoint = _get_api_endpoint()
+    if not api_endpoint:
         logger.warning("API_ENDPOINT not configured, skipping verification email")
         return
 
-    sender_email = _get_ses_sender_email()
-    if not sender_email:
-        logger.warning("SES sender email not configured, skipping verification email")
+    if not SES_SENDER_EMAIL:
+        logger.warning("SES_SENDER_EMAIL not configured, skipping verification email")
         return
 
-    verification_link = f"{API_ENDPOINT}/bot-credentials/{credential_id}/verify?token={token}"
+    verification_link = f"{api_endpoint}bot-credentials/{credential_id}/verify?token={token}"
 
     subject = "Verify your Bot Credential Email - AXRAIL Meeting Assistant"
     body_html = f"""
@@ -150,7 +163,7 @@ def _send_verification_email(email: str, credential_id: str, token: str) -> None
 
     try:
         ses_client.send_email(
-            Source=sender_email,
+            Source=SES_SENDER_EMAIL,
             Destination={"ToAddresses": [email]},
             Message={
                 "Subject": {"Data": subject, "Charset": "UTF-8"},

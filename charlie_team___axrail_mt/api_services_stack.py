@@ -9,7 +9,6 @@ from aws_cdk import (
 from constructs import Construct
 
 from charlie_team___axrail_mt.lambda_stack import LambdaStack
-from charlie_team___axrail_mt.shared_resources_stack import SharedResourcesStack
 
 
 class ApiServicesStack(Stack):
@@ -21,14 +20,12 @@ class ApiServicesStack(Stack):
         *,
         env_name: str,
         lambda_stack: LambdaStack,
-        shared_resources: SharedResourcesStack,
         **kwargs
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
         
         self.env_name = env_name
         self.lambda_stack = lambda_stack
-        self.shared_resources = shared_resources
         
         self._create_api_gateway()
         self._create_admin_authorizer_lambda()
@@ -70,10 +67,10 @@ class ApiServicesStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_11,
             handler="lambda_function.lambda_handler",
             code=_lambda.Code.from_asset("lambdas/Functions/AdminAuthorizer"),
-            role=self.shared_resources.lambda_role,
+            role=self.lambda_stack.lambda_role,
             layers=[
-                self.shared_resources.shared_layer,
-                self.shared_resources.powertools_layer,
+                self.lambda_stack.shared_layer,
+                self.lambda_stack.powertools_layer,
             ],
             environment={
                 "POWERTOOLS_SERVICE_NAME": "axrail-authorizer",
@@ -92,10 +89,10 @@ class ApiServicesStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_11,
             handler="lambda_function.lambda_handler",
             code=_lambda.Code.from_asset("lambdas/Functions/AuthAuthorizer"),
-            role=self.shared_resources.lambda_role,
+            role=self.lambda_stack.lambda_role,
             layers=[
-                self.shared_resources.shared_layer,
-                self.shared_resources.powertools_layer,
+                self.lambda_stack.shared_layer,
+                self.lambda_stack.powertools_layer,
             ],
             environment={
                 "POWERTOOLS_SERVICE_NAME": "axrail-authorizer",
@@ -396,7 +393,6 @@ class ApiServicesStack(Stack):
             authorizer=self.admin_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
-
 
     def _create_exports(self) -> None:
         CfnOutput(
