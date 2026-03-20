@@ -2,6 +2,8 @@
 GetSessionTranscripts Lambda Function
 
 Retrieves all transcripts for a specific session.
+- Admin: can access any session's transcripts
+- User: can only access transcripts from sessions in assigned projects
 """
 
 import os
@@ -11,7 +13,7 @@ import boto3
 from boto3.dynamodb.conditions import Key
 
 from response_utils import createResponse
-from custom_exceptions import BadRequestError, NotFoundError
+from custom_exceptions import BadRequestError, NotFoundError, UnauthorizedError
 
 logger = Logger()
 tracer = Tracer()
@@ -19,6 +21,27 @@ tracer = Tracer()
 dynamodb = boto3.resource("dynamodb")
 transcripts_table = dynamodb.Table(os.environ.get("TRANSCRIPTS_TABLE"))
 sessions_table = dynamodb.Table(os.environ.get("SESSIONS_TABLE"))
+project_users_table = dynamodb.Table(os.environ.get("PROJECT_USERS_TABLE"))
+
+
+def _get_user_context(event: dict) -> tuple:
+    """Extract user_id and role from authorizer context."""
+    request_context = event.get("requestContext", {})
+    authorizer = request_context.get("authorizer", {})
+    user_id = authorizer.get("user_id", "")
+    groups = authorizer.get("groups", "")
+    is_admin = "admin" in groups.split(",")
+    return user_id, is_admin
+
+
+def _is_user_assigned_to_project(user_id: str, project_id: str) -> bool:
+    """Check if user is assigned to the project."""
+    response = project_users_table.query(
+        IndexName="user-index",
+        KeyConditionExpression=Key("user_id").eq(user_id),
+    )
+    assigned_projects = [item["project_id"] for item in response.get("Items", [])]
+    return project_id in assigned_projects
 
 
 def _get_session_id(event: dict) -> str:
@@ -29,10 +52,11 @@ def _get_session_id(event: dict) -> str:
     return session_id
 
 
-def _verify_session_exists(session_id: str) -> None:
+def _get_session(session_id: str) -> dict:
     response = sessions_table.get_item(Key={"session_id": session_id})
     if "Item" not in response:
         raise NotFoundError(f"Session {session_id} not found")
+    return response["Item"]
 
 
 def _get_pagination_params(event: dict) -> tuple:
@@ -46,7 +70,14 @@ def _get_pagination_params(event: dict) -> tuple:
 def lambda_handler(event, context):
     try:
         session_id = _get_session_id(event)
-        _verify_session_exists(session_id)
+        session = _get_session(session_id)
+        
+        user_id, is_admin = _get_user_context(event)
+        
+        if not is_admin:
+            project_id = session.get("project_id")
+            if not _is_user_assigned_to_project(user_id, project_id):
+                raise UnauthorizedError("You don't have access to this session")
 
         limit, last_key = _get_pagination_params(event)
 
@@ -77,6 +108,9 @@ def lambda_handler(event, context):
     except BadRequestError as e:
         logger.warning(f"Bad request: {e}")
         return createResponse(400, str(e))
+    except UnauthorizedError as e:
+        logger.warning(f"Unauthorized: {e}")
+        return createResponse(403, str(e))
     except NotFoundError as e:
         logger.warning(f"Not found: {e}")
         return createResponse(404, str(e))

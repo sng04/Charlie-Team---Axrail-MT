@@ -108,6 +108,7 @@ class LambdaStack(Stack):
                     "cognito-idp:AdminCreateUser",
                     "cognito-idp:AdminAddUserToGroup",
                     "cognito-idp:AdminListGroupsForUser",
+                    "cognito-idp:GlobalSignOut",
                 ],
                 resources=[self.cognito_stack.user_pool.user_pool_arn],
             )
@@ -270,6 +271,10 @@ class LambdaStack(Stack):
 
         self.change_password_fn = self._create_lambda_function(
             "ChangePassword", "lambdas/Functions/ChangePassword"
+        )
+
+        self.logout_fn = self._create_lambda_function(
+            "Logout", "lambdas/Functions/Logout"
         )
 
         # Project CRUD
@@ -471,6 +476,13 @@ class LambdaStack(Stack):
             "ChangePasswordFnArn",
             value=self.change_password_fn.function_arn,
             export_name=f"AXRAIL-ChangePasswordFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "LogoutFnArn",
+            value=self.logout_fn.function_arn,
+            export_name=f"AXRAIL-LogoutFnArn-{self.env_name}",
         )
 
         CfnOutput(

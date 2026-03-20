@@ -75,6 +75,7 @@ class ApiServicesStack(Stack):
             environment={
                 "POWERTOOLS_SERVICE_NAME": "axrail-authorizer",
                 "LOG_LEVEL": "INFO",
+                "USER_POOL_ID": self.lambda_stack.cognito_stack.user_pool.user_pool_id,
             },
             timeout=Duration.seconds(10),
             memory_size=128,
@@ -97,6 +98,7 @@ class ApiServicesStack(Stack):
             environment={
                 "POWERTOOLS_SERVICE_NAME": "axrail-authorizer",
                 "LOG_LEVEL": "INFO",
+                "USER_POOL_ID": self.lambda_stack.cognito_stack.user_pool.user_pool_id,
             },
             timeout=Duration.seconds(10),
             memory_size=128,
@@ -104,22 +106,22 @@ class ApiServicesStack(Stack):
         )
 
     def _create_authorizers(self) -> None:
-        # Admin-only authorizer
+        # Admin-only authorizer (no cache to ensure logout works immediately)
         self.admin_authorizer = apigw.TokenAuthorizer(
             self,
             "AdminAuthorizer",
             authorizer_name=f"AXRAIL-AdminAuthorizer-{self.env_name}",
             handler=self.admin_authorizer_fn,
-            results_cache_ttl=Duration.minutes(5),
+            results_cache_ttl=Duration.seconds(0),
         )
         
-        # Auth authorizer (admin or user)
+        # Auth authorizer (no cache to ensure logout works immediately)
         self.auth_authorizer = apigw.TokenAuthorizer(
             self,
             "AuthAuthorizer",
             authorizer_name=f"AXRAIL-AuthAuthorizer-{self.env_name}",
             handler=self.auth_authorizer_fn,
-            results_cache_ttl=Duration.minutes(5),
+            results_cache_ttl=Duration.seconds(0),
         )
 
     def _create_auth_routes(self) -> None:
@@ -152,15 +154,24 @@ class ApiServicesStack(Stack):
             "POST",
             apigw.LambdaIntegration(self.lambda_stack.change_password_fn),
         )
+        
+        # POST /auth/logout - Logout (authenticated users)
+        logout_resource = auth_resource.add_resource("logout")
+        logout_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.logout_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
 
     def _create_project_routes(self) -> None:
         projects_resource = self.api.root.add_resource("projects")
         
-        # GET /projects - List all projects (admin only)
+        # GET /projects - List projects (admin: all, user: assigned only)
         projects_resource.add_method(
             "GET",
             apigw.LambdaIntegration(self.lambda_stack.list_projects_fn),
-            authorizer=self.admin_authorizer,
+            authorizer=self.auth_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
         
@@ -174,11 +185,11 @@ class ApiServicesStack(Stack):
         
         project_resource = projects_resource.add_resource("{projectId}")
         
-        # GET /projects/{projectId} - Get single project (admin only)
+        # GET /projects/{projectId} - Get single project (admin: any, user: assigned only)
         project_resource.add_method(
             "GET",
             apigw.LambdaIntegration(self.lambda_stack.get_project_fn),
-            authorizer=self.admin_authorizer,
+            authorizer=self.auth_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
         

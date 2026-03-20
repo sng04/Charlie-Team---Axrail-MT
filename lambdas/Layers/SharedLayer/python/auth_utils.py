@@ -226,3 +226,13 @@ def verify_admin_role(access_token: str) -> dict:
         raise
     except ClientError as e:
         raise BadRequestError(f"Failed to verify admin role: {e.response['Error']['Message']}")
+
+
+def logout_user(access_token: str) -> None:
+    """Invalidate user's Cognito tokens using global sign out."""
+    try:
+        cognito_client.global_sign_out(AccessToken=access_token)
+    except cognito_client.exceptions.NotAuthorizedException:
+        raise UnauthorizedError("Invalid or expired token")
+    except ClientError as e:
+        raise BadRequestError(f"Failed to logout: {e.response['Error']['Message']}")

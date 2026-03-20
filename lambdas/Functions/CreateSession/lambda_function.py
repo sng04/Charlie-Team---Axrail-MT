@@ -2,6 +2,9 @@
 CreateSession Lambda Function
 
 Creates a new session linked to a project in DynamoDB.
+- Admin: can create session for any project
+- User: can only create session for assigned projects
+
 Supports two modes:
 1. Warm Pool Mode (default): Sends meeting request to SQS for pre-warmed containers
 2. Cold Start Mode: Starts new ECS task directly (fallback)
@@ -16,9 +19,10 @@ from datetime import datetime, timezone
 
 from aws_lambda_powertools import Logger, Tracer
 import boto3
+from boto3.dynamodb.conditions import Key
 
 from response_utils import createResponse
-from custom_exceptions import BadRequestError, NotFoundError
+from custom_exceptions import BadRequestError, NotFoundError, UnauthorizedError
 
 logger = Logger()
 tracer = Tracer()
@@ -29,6 +33,7 @@ sqs_client = boto3.client("sqs")
 
 sessions_table = dynamodb.Table(os.environ.get("SESSIONS_TABLE"))
 projects_table = dynamodb.Table(os.environ.get("PROJECTS_TABLE"))
+project_users_table = dynamodb.Table(os.environ.get("PROJECT_USERS_TABLE"))
 bot_credentials_table = dynamodb.Table(os.environ.get("BOT_CREDENTIALS_TABLE"))
 bot_pool_table = dynamodb.Table(os.environ.get("BOT_POOL_TABLE", ""))
 
@@ -39,6 +44,26 @@ ECS_SECURITY_GROUP = os.environ.get("ECS_SECURITY_GROUP")
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 WARM_POOL_ENABLED = os.environ.get("WARM_POOL_ENABLED", "true").lower() == "true"
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+
+
+def _get_user_context(event: dict) -> tuple:
+    """Extract user_id and role from authorizer context."""
+    request_context = event.get("requestContext", {})
+    authorizer = request_context.get("authorizer", {})
+    user_id = authorizer.get("user_id", "")
+    groups = authorizer.get("groups", "")
+    is_admin = "admin" in groups.split(",")
+    return user_id, is_admin
+
+
+def _is_user_assigned_to_project(user_id: str, project_id: str) -> bool:
+    """Check if user is assigned to the project."""
+    response = project_users_table.query(
+        IndexName="user-index",
+        KeyConditionExpression=Key("user_id").eq(user_id),
+    )
+    assigned_projects = [item["project_id"] for item in response.get("Items", [])]
+    return project_id in assigned_projects
 
 
 def _parse_body(event: dict) -> dict:
@@ -62,18 +87,6 @@ def _verify_project_exists(project_id: str) -> dict:
 
 
 def _get_bot_credential(project: dict) -> dict:
-    """
-    Get and validate bot credential from project.
-
-    Args:
-        project: Project data from DynamoDB
-
-    Returns:
-        Bot credential data
-
-    Raises:
-        BadRequestError: If credential not assigned, not verified, or not active
-    """
     credential_id = project.get("bot_credential_id")
     if not credential_id:
         raise BadRequestError(
@@ -130,12 +143,6 @@ def _check_warm_pool_available(credential_id: str) -> bool:
 def _send_to_warm_pool(
     session_id: str, project_id: str, credential_id: str, meeting_link: str
 ) -> bool:
-    """
-    Send meeting request to SQS for warm pool containers.
-
-    Returns:
-        bool: True if message sent successfully
-    """
     if not SQS_QUEUE_URL:
         logger.warning("SQS_QUEUE_URL not configured")
         return False
@@ -170,18 +177,6 @@ def _send_to_warm_pool(
 def _start_meeting_bot(
     session_id: str, project_id: str, credential_id: str, meeting_link: str
 ) -> str:
-    """
-    Start ECS Fargate task for Meeting Bot.
-
-    Args:
-        session_id: Session ID
-        project_id: Project ID
-        credential_id: Bot credential ID for fetching Gmail credentials
-        meeting_link: Google Meet URL
-
-    Returns:
-        str: Task ARN
-    """
     if not all([ECS_CLUSTER, ECS_TASK_DEFINITION, ECS_SUBNETS, ECS_SECURITY_GROUP]):
         logger.warning("ECS configuration not complete, skipping bot start")
         return None
@@ -237,8 +232,12 @@ def lambda_handler(event, context):
         data = _parse_body(event)
         _validate_input(data)
 
-        project = _verify_project_exists(data["project_id"])
+        user_id, is_admin = _get_user_context(event)
+        
+        if not is_admin and not _is_user_assigned_to_project(user_id, data["project_id"]):
+            raise UnauthorizedError("You don't have access to this project")
 
+        project = _verify_project_exists(data["project_id"])
         credential = _get_bot_credential(project)
 
         session_id = str(uuid.uuid4())
@@ -258,7 +257,6 @@ def lambda_handler(event, context):
             "updated_at": now,
         }
 
-        # Try warm pool first if enabled
         use_warm_pool = WARM_POOL_ENABLED and _check_warm_pool_available(credential["credential_id"])
 
         if use_warm_pool:
@@ -275,7 +273,6 @@ def lambda_handler(event, context):
             else:
                 use_warm_pool = False
 
-        # Fallback to cold start if warm pool not available or failed
         if not use_warm_pool:
             task_arn = _start_meeting_bot(
                 session_id,
@@ -291,6 +288,9 @@ def lambda_handler(event, context):
         sessions_table.put_item(Item=item)
 
         return createResponse(200, "Session created successfully", item)
+    except UnauthorizedError as e:
+        logger.warning(f"Unauthorized: {e}")
+        return createResponse(403, str(e))
     except BadRequestError as e:
         logger.warning(f"Bad request: {e}")
         return createResponse(400, str(e))
