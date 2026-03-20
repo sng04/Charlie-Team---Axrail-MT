@@ -31,7 +31,9 @@ ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
 
 
 def _parse_body(event: dict) -> dict:
-    body = event.get("body", "{}")
+    body = event.get("body")
+    if not body:
+        return {}
     return json.loads(body) if isinstance(body, str) else body
 
 
@@ -125,15 +127,16 @@ def lambda_handler(event, context):
     
     Request body (optional):
     - credential_ids: List of specific credential IDs to warm up
-    - containers_per_credential: Number of containers per credential (default: 1)
+    - containers_per_credential: Override warm_pool_size for all credentials (optional)
     
-    If no body provided, warms up all active credentials with 1 container each.
+    If no body provided, warms up all active credentials using their warm_pool_size setting.
+    Each credential can have different warm_pool_size stored in BotCredentials table.
     """
     try:
         data = _parse_body(event)
         
         credential_ids = data.get("credential_ids")
-        containers_per_credential = data.get("containers_per_credential", 1)
+        override_containers = data.get("containers_per_credential")
         
         if credential_ids:
             # Warm specific credentials
@@ -154,13 +157,18 @@ def lambda_handler(event, context):
         for credential in credentials:
             credential_id = credential["credential_id"]
             
+            # Use override if provided, otherwise use credential's warm_pool_size (default: 1)
+            target_containers = int(override_containers if override_containers else credential.get("warm_pool_size", 1))
+            
             # Check how many idle containers already exist
             existing_idle = _get_idle_containers_for_credential(credential_id)
-            needed = max(0, containers_per_credential - existing_idle)
+            needed = max(0, target_containers - existing_idle)
             
             if needed == 0:
-                logger.info(f"Credential {credential_id} already has {existing_idle} idle containers")
+                logger.info(f"Credential {credential_id} already has {existing_idle} idle containers (target: {target_containers})")
                 continue
+            
+            logger.info(f"Starting {needed} containers for {credential_id} (target: {target_containers}, existing: {existing_idle})")
             
             for _ in range(needed):
                 task_arn = _start_warm_container(credential_id)
@@ -174,7 +182,6 @@ def lambda_handler(event, context):
             "started": len(started_tasks),
             "tasks": started_tasks,
         })
-        
     except BadRequestError as e:
         logger.warning(f"Bad request: {e}")
         return createResponse(400, str(e))

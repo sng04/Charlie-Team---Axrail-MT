@@ -156,7 +156,7 @@ def lambda_handler(event, context):
 
         existing = _get_existing_credential(credential_id)
 
-        allowed_fields = ["email", "password", "available_status"]
+        allowed_fields = ["email", "password", "available_status", "warm_pool_size"]
         update_data = {}
         email_changed = False
         verification_token = None
@@ -177,6 +177,10 @@ def lambda_handler(event, context):
                     if data[key] not in ["active", "inactive"]:
                         raise BadRequestError("available_status must be 'active' or 'inactive'")
                     update_data["available_status"] = data[key]
+                elif key == "warm_pool_size":
+                    if not isinstance(data[key], int) or data[key] < 1:
+                        raise BadRequestError("warm_pool_size must be a positive integer")
+                    update_data["warm_pool_size"] = data[key]
 
         if not update_data and "password" not in data:
             raise BadRequestError("No valid fields to update")

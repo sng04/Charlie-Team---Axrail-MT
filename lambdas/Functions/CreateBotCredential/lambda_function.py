@@ -181,12 +181,17 @@ def lambda_handler(event, context):
         normalized_password = _normalize_password(data["password"])
         _store_password(credential_id, normalized_password)
 
+        warm_pool_size = data.get("warm_pool_size", 1)
+        if not isinstance(warm_pool_size, int) or warm_pool_size < 1:
+            warm_pool_size = 1
+
         item = {
             "credential_id": credential_id,
             "email": data["email"],
             "verification_status": "not_verified",
             "verification_token": verification_token,
             "available_status": "inactive",
+            "warm_pool_size": warm_pool_size,
             "created_at": now,
             "updated_at": now,
         }

@@ -263,13 +263,7 @@ class MeetingOrchestrator:
 
         # Leave the meeting but keep browser open
         if self._page and self._is_logged_in:
-            try:
-                leave_btn = self._page.locator('[aria-label*="Leave call"]')
-                if await leave_btn.count() > 0:
-                    await leave_btn.first.click()
-                    await asyncio.sleep(2)
-            except Exception as e:
-                logger.warning(f"Could not click leave button: {e}")
+            await self._leave_meeting()
 
             try:
                 await self._page.goto("https://meet.google.com")
@@ -279,6 +273,37 @@ class MeetingOrchestrator:
 
         self._is_running = False
         logger.info("Meeting cleanup complete")
+
+    async def _leave_meeting(self) -> None:
+        """Click leave button to exit meeting."""
+        leave_selectors = [
+            '[aria-label*="Leave call"]',
+            '[aria-label*="Tinggalkan panggilan"]',
+            '[aria-label*="Keluar"]',
+            'button[data-tooltip*="Leave"]',
+            '[jsname="CQylAd"]',
+            'button:has-text("Leave")',
+            'button:has-text("Tinggalkan")',
+        ]
+
+        for selector in leave_selectors:
+            try:
+                btn = self._page.locator(selector)
+                if await btn.count() > 0:
+                    await btn.first.click()
+                    logger.info(f"Clicked leave button: {selector}")
+                    await asyncio.sleep(2)
+                    return
+            except Exception as e:
+                logger.debug(f"Leave selector {selector} failed: {e}")
+                continue
+
+        logger.warning("Could not find leave button, trying keyboard shortcut")
+        try:
+            await self._page.keyboard.press("Control+d")
+            await asyncio.sleep(2)
+        except Exception as e:
+            logger.warning(f"Keyboard shortcut failed: {e}")
 
     async def cleanup_full(self) -> None:
         """Full cleanup including browser shutdown."""
