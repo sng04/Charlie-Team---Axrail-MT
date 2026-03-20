@@ -1,9 +1,9 @@
 """
-GetProjectSessions Lambda Function
+GetSessionTranscripts Lambda Function
 
-Retrieves all sessions for a specific project using GSI.
-- Admin: can access any project's sessions
-- User: can only access sessions from assigned projects
+Retrieves all transcripts for a specific session.
+- Admin: can access any session's transcripts
+- User: can only access transcripts from sessions in assigned projects
 """
 
 import os
@@ -13,14 +13,14 @@ import boto3
 from boto3.dynamodb.conditions import Key
 
 from response_utils import createResponse
-from custom_exceptions import NotFoundError, UnauthorizedError
+from custom_exceptions import BadRequestError, NotFoundError, UnauthorizedError
 
 logger = Logger()
 tracer = Tracer()
 
 dynamodb = boto3.resource("dynamodb")
+transcripts_table = dynamodb.Table(os.environ.get("TRANSCRIPTS_TABLE"))
 sessions_table = dynamodb.Table(os.environ.get("SESSIONS_TABLE"))
-projects_table = dynamodb.Table(os.environ.get("PROJECTS_TABLE"))
 project_users_table = dynamodb.Table(os.environ.get("PROJECT_USERS_TABLE"))
 
 
@@ -44,56 +44,70 @@ def _is_user_assigned_to_project(user_id: str, project_id: str) -> bool:
     return project_id in assigned_projects
 
 
-def _verify_project_exists(project_id: str) -> None:
-    response = projects_table.get_item(Key={"project_id": project_id})
+def _get_session_id(event: dict) -> str:
+    path_params = event.get("pathParameters") or {}
+    session_id = path_params.get("sessionId")
+    if not session_id:
+        raise BadRequestError("Session ID is required")
+    return session_id
+
+
+def _get_session(session_id: str) -> dict:
+    response = sessions_table.get_item(Key={"session_id": session_id})
     if "Item" not in response:
-        raise NotFoundError(f"Project {project_id} not found")
+        raise NotFoundError(f"Session {session_id} not found")
+    return response["Item"]
+
+
+def _get_pagination_params(event: dict) -> tuple:
+    query_params = event.get("queryStringParameters") or {}
+    limit = min(int(query_params.get("limit", 50)), 100)
+    last_key = query_params.get("lastKey")
+    return limit, last_key
 
 
 @tracer.capture_lambda_handler
 def lambda_handler(event, context):
     try:
-        path_params = event.get("pathParameters") or {}
-        project_id = path_params.get("projectId")
-        
-        if not project_id:
-            return createResponse(400, "Missing projectId path parameter")
-        
-        _verify_project_exists(project_id)
+        session_id = _get_session_id(event)
+        session = _get_session(session_id)
         
         user_id, is_admin = _get_user_context(event)
         
-        if not is_admin and not _is_user_assigned_to_project(user_id, project_id):
-            raise UnauthorizedError("You don't have access to this project")
-        
-        query_params = event.get("queryStringParameters") or {}
-        limit = min(int(query_params.get("limit", 20)), 100)
-        
+        if not is_admin:
+            project_id = session.get("project_id")
+            if not _is_user_assigned_to_project(user_id, project_id):
+                raise UnauthorizedError("You don't have access to this session")
+
+        limit, last_key = _get_pagination_params(event)
+
         query_kwargs = {
-            "IndexName": "project-index",
-            "KeyConditionExpression": Key("project_id").eq(project_id),
+            "KeyConditionExpression": Key("session_id").eq(session_id),
             "Limit": limit,
+            "ScanIndexForward": True, 
         }
-        
-        last_key = query_params.get("lastKey")
+
         if last_key:
             query_kwargs["ExclusiveStartKey"] = {
-                "session_id": last_key,
-                "project_id": project_id,
+                "session_id": session_id,
+                "timestamp": last_key,
             }
-        
-        response = sessions_table.query(**query_kwargs)
-        
+
+        response = transcripts_table.query(**query_kwargs)
+
         result = {
-            "project_id": project_id,
+            "session_id": session_id,
             "items": response.get("Items", []),
             "count": len(response.get("Items", [])),
         }
-        
+
         if "LastEvaluatedKey" in response:
-            result["lastKey"] = response["LastEvaluatedKey"]["session_id"]
-        
-        return createResponse(200, "Project sessions retrieved successfully", result)
+            result["lastKey"] = response["LastEvaluatedKey"]["timestamp"]
+
+        return createResponse(200, "Transcripts retrieved successfully", result)
+    except BadRequestError as e:
+        logger.warning(f"Bad request: {e}")
+        return createResponse(400, str(e))
     except UnauthorizedError as e:
         logger.warning(f"Unauthorized: {e}")
         return createResponse(403, str(e))

@@ -2,22 +2,53 @@
 DeleteSession Lambda Function
 
 Deletes a session from DynamoDB.
+- Admin: can delete any session
+- User: can only delete sessions from assigned projects
 """
 
 import os
 
 from aws_lambda_powertools import Logger, Tracer
 import boto3
+from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 from response_utils import createResponse
+from custom_exceptions import NotFoundError, UnauthorizedError
 
 logger = Logger()
 tracer = Tracer()
 
 dynamodb = boto3.resource("dynamodb")
-table_name = os.environ.get("SESSIONS_TABLE")
-table = dynamodb.Table(table_name)
+sessions_table = dynamodb.Table(os.environ.get("SESSIONS_TABLE"))
+project_users_table = dynamodb.Table(os.environ.get("PROJECT_USERS_TABLE"))
+
+
+def _get_user_context(event: dict) -> tuple:
+    """Extract user_id and role from authorizer context."""
+    request_context = event.get("requestContext", {})
+    authorizer = request_context.get("authorizer", {})
+    user_id = authorizer.get("user_id", "")
+    groups = authorizer.get("groups", "")
+    is_admin = "admin" in groups.split(",")
+    return user_id, is_admin
+
+
+def _is_user_assigned_to_project(user_id: str, project_id: str) -> bool:
+    """Check if user is assigned to the project."""
+    response = project_users_table.query(
+        IndexName="user-index",
+        KeyConditionExpression=Key("user_id").eq(user_id),
+    )
+    assigned_projects = [item["project_id"] for item in response.get("Items", [])]
+    return project_id in assigned_projects
+
+
+def _get_session(session_id: str) -> dict:
+    response = sessions_table.get_item(Key={"session_id": session_id})
+    if "Item" not in response:
+        raise NotFoundError(f"Session {session_id} not found")
+    return response["Item"]
 
 
 @tracer.capture_lambda_handler
@@ -29,12 +60,26 @@ def lambda_handler(event, context):
         if not session_id:
             return createResponse(400, "Missing sessionId path parameter")
         
-        table.delete_item(
+        session = _get_session(session_id)
+        user_id, is_admin = _get_user_context(event)
+        
+        if not is_admin:
+            project_id = session.get("project_id")
+            if not _is_user_assigned_to_project(user_id, project_id):
+                raise UnauthorizedError("You don't have access to this session")
+        
+        sessions_table.delete_item(
             Key={"session_id": session_id},
             ConditionExpression="attribute_exists(session_id)",
         )
         
         return createResponse(200, "Session deleted successfully")
+    except UnauthorizedError as e:
+        logger.warning(f"Unauthorized: {e}")
+        return createResponse(403, str(e))
+    except NotFoundError as e:
+        logger.warning(f"Not found: {e}")
+        return createResponse(404, str(e))
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
             return createResponse(404, f"Session {session_id} not found")

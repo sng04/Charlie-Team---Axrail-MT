@@ -2,35 +2,63 @@
 AuthAuthorizer Lambda Function
 
 Custom Lambda Authorizer that validates JWT token for any authenticated user.
+Validates token against Cognito to ensure revoked tokens are rejected immediately.
 Allows both admin and regular users to access protected resources.
 """
 
-import base64
-import json
+import os
 
+import boto3
 from aws_lambda_powertools import Logger, Tracer
 
 logger = Logger()
 tracer = Tracer()
 
+cognito_client = boto3.client("cognito-idp")
+USER_POOL_ID = os.environ.get("USER_POOL_ID")
 
-def _decode_jwt_payload(token: str) -> dict:
-    """Decode JWT payload without verification (API Gateway already validated)."""
+
+def _extract_token(auth_header: str) -> str:
+    """Extract token from Authorization header."""
+    if auth_header.startswith("Bearer "):
+        return auth_header[7:]
+    return auth_header
+
+
+def _validate_token_with_cognito(access_token: str) -> dict:
+    """
+    Validate token by calling Cognito GetUser API.
+    This ensures revoked tokens are rejected immediately.
+    """
     try:
-        if token.startswith("Bearer "):
-            token = token[7:]
+        response = cognito_client.get_user(AccessToken=access_token)
         
-        parts = token.split(".")
-        if len(parts) != 3:
-            raise ValueError("Invalid JWT format")
+        user_info = {"username": response["Username"]}
+        for attr in response["UserAttributes"]:
+            if attr["Name"] == "sub":
+                user_info["user_id"] = attr["Value"]
+            elif attr["Name"] == "email":
+                user_info["email"] = attr["Value"]
         
-        payload = parts[1]
-        payload += "=" * (4 - len(payload) % 4)
-        decoded = base64.urlsafe_b64decode(payload)
-        return json.loads(decoded)
+        return user_info
+    except cognito_client.exceptions.NotAuthorizedException:
+        raise ValueError("Token is invalid or revoked")
     except Exception as e:
-        logger.error(f"Failed to decode JWT: {e}")
-        raise ValueError("Invalid token")
+        logger.error(f"Cognito validation error: {e}")
+        raise ValueError("Token validation failed")
+
+
+def _get_user_groups(username: str) -> list:
+    """Get user's Cognito groups."""
+    try:
+        response = cognito_client.admin_list_groups_for_user(
+            Username=username,
+            UserPoolId=USER_POOL_ID,
+        )
+        return [group["GroupName"] for group in response["Groups"]]
+    except Exception as e:
+        logger.error(f"Failed to get user groups: {e}")
+        return []
 
 
 def _generate_policy(principal_id: str, effect: str, resource: str, context: dict = None) -> dict:
@@ -56,7 +84,7 @@ def _generate_policy(principal_id: str, effect: str, resource: str, context: dic
 
 
 def _get_wildcard_resource(method_arn: str) -> str:
-    """Convert specific method ARN to wildcard for caching."""
+    """Convert specific method ARN to wildcard."""
     parts = method_arn.split("/")
     return f"{parts[0]}/*"
 
@@ -65,6 +93,7 @@ def _get_wildcard_resource(method_arn: str) -> str:
 def lambda_handler(event, context):
     """
     Authorizer handler that allows any authenticated user (admin or user).
+    Validates token against Cognito to ensure revoked tokens are rejected.
     """
     try:
         token = event.get("authorizationToken", "")
@@ -74,15 +103,17 @@ def lambda_handler(event, context):
             logger.warning("No authorization token provided")
             raise Exception("Unauthorized")
         
-        payload = _decode_jwt_payload(token)
+        access_token = _extract_token(token)
         
-        username = payload.get("username") or payload.get("cognito:username", "unknown")
-        user_id = payload.get("sub", "unknown")
-        groups = payload.get("cognito:groups", [])
+        user_info = _validate_token_with_cognito(access_token)
+        
+        username = user_info.get("username", "unknown")
+        user_id = user_info.get("user_id", "unknown")
+        
+        groups = _get_user_groups(username)
         
         logger.info(f"Authorizing user: {username}, groups: {groups}")
         
-        # Allow any authenticated user (admin or user group)
         if "admin" not in groups and "user" not in groups:
             logger.warning(f"User {username} has no valid group, denying access")
             return _generate_policy(
