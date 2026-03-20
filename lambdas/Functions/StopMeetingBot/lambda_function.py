@@ -1,7 +1,9 @@
 """
 StopMeetingBot Lambda Function
 
-Stops the Meeting Bot ECS task for a specific session.
+Stops the Meeting Bot for a specific session.
+For warm pool mode: signals the container to stop the current meeting (container stays alive)
+For cold start mode: stops the ECS task entirely
 """
 
 import os
@@ -20,6 +22,9 @@ dynamodb = boto3.resource("dynamodb")
 ecs_client = boto3.client("ecs")
 
 sessions_table = dynamodb.Table(os.environ.get("SESSIONS_TABLE"))
+bot_pool_table_name = os.environ.get("BOT_POOL_TABLE", "")
+bot_pool_table = dynamodb.Table(bot_pool_table_name) if bot_pool_table_name else None
+
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER")
 
 
@@ -38,8 +43,49 @@ def _get_session(session_id: str) -> dict:
     return response["Item"]
 
 
+def _is_warm_pool_session(session: dict) -> bool:
+    """Check if session is using warm pool mode."""
+    return session.get("dispatch_mode") == "warm_pool"
+
+
+def _signal_warm_container_to_stop(session: dict) -> bool:
+    """
+    Signal warm container to stop current meeting by updating session status.
+    The container polls session status and will stop when it sees 'stop_requested'.
+    """
+    session_id = session.get("session_id")
+    container_id = session.get("container_id")
+
+    try:
+        sessions_table.update_item(
+            Key={"session_id": session_id},
+            UpdateExpression="SET bot_status = :status, updated_at = :updated_at, stop_requested = :stop",
+            ExpressionAttributeValues={
+                ":status": "stopping",
+                ":updated_at": datetime.now(timezone.utc).isoformat(),
+                ":stop": True,
+            },
+        )
+        logger.info(f"Signaled warm container to stop session: {session_id}")
+
+        if bot_pool_table and container_id:
+            try:
+                bot_pool_table.update_item(
+                    Key={"container_id": container_id},
+                    UpdateExpression="SET stop_current_session = :stop",
+                    ExpressionAttributeValues={":stop": True},
+                )
+            except Exception as e:
+                logger.warning(f"Could not update BotPool: {e}")
+
+        return True
+    except Exception as e:
+        logger.error(f"Error signaling warm container: {e}")
+        return False
+
+
 def _stop_ecs_task(task_arn: str) -> bool:
-    """Stop ECS task."""
+    """Stop ECS task (for cold start mode only)."""
     if not task_arn or not ECS_CLUSTER:
         return False
 
@@ -74,12 +120,23 @@ def lambda_handler(event, context):
         session_id = _get_session_id(event)
         session = _get_session(session_id)
 
-        task_arn = session.get("task_arn")
         current_status = session.get("bot_status")
 
         if current_status in ["completed", "failed", "stopped"]:
             return createResponse(400, f"Bot is already {current_status}")
 
+        if _is_warm_pool_session(session):
+            signaled = _signal_warm_container_to_stop(session)
+            if signaled:
+                return createResponse(200, "Stop signal sent to meeting bot", {
+                    "session_id": session_id,
+                    "mode": "warm_pool",
+                    "message": "Container will stop current meeting and return to idle state"
+                })
+            else:
+                return createResponse(500, "Failed to signal meeting bot to stop")
+
+        task_arn = session.get("task_arn")
         if not task_arn:
             return createResponse(400, "No active bot task for this session")
 
@@ -87,7 +144,10 @@ def lambda_handler(event, context):
 
         if stopped:
             _update_session_status(session_id, "stopped")
-            return createResponse(200, "Meeting bot stopped successfully")
+            return createResponse(200, "Meeting bot stopped successfully", {
+                "session_id": session_id,
+                "mode": "cold_start"
+            })
         else:
             return createResponse(500, "Failed to stop meeting bot")
 

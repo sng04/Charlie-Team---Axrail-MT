@@ -40,6 +40,7 @@ class ApiServicesStack(Stack):
         self._create_session_routes()
         self._create_meeting_bot_routes()
         self._create_bot_credential_routes()
+        self._create_warm_pool_routes()
         self._create_exports()
 
     def _create_api_gateway(self) -> None:
@@ -381,6 +382,19 @@ class ApiServicesStack(Stack):
         verify_resource.add_method(
             "GET",
             apigw.LambdaIntegration(self.lambda_stack.verify_bot_credential_fn),
+        )
+
+    def _create_warm_pool_routes(self) -> None:
+        """Create Warm Pool management API routes."""
+        warm_pool_resource = self.api.root.add_resource("warm-pool")
+
+        # POST /warm-pool/start - Start warm pool containers (admin only)
+        start_resource = warm_pool_resource.add_resource("start")
+        start_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.start_warm_pool_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
         )
 
 

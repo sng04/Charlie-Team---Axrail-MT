@@ -1,7 +1,7 @@
 """
 Meeting Bot Stack
 
-CDK Stack for Meeting Bot infrastructure (VPC, ECS, etc).
+CDK Stack for Meeting Bot infrastructure (VPC, ECS, SQS for warm pool, etc).
 Separated from other stacks because the resources are quite large.
 """
 
@@ -9,16 +9,18 @@ from aws_cdk import (
     Stack,
     RemovalPolicy,
     CfnOutput,
+    Duration,
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_iam as iam,
     aws_logs as logs,
+    aws_sqs as sqs,
 )
 from constructs import Construct
 
 
 class MeetingBotStack(Stack):
-    """Stack for Meeting Bot ECS Fargate infrastructure."""
+    """Stack for Meeting Bot ECS Fargate infrastructure with warm pool support."""
 
     def __init__(
         self,
@@ -30,6 +32,8 @@ class MeetingBotStack(Stack):
         sessions_table_arn: str,
         projects_table_arn: str,
         bot_credentials_table_arn: str,
+        bot_pool_table_arn: str,
+        bot_pool_table_name: str,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -38,12 +42,26 @@ class MeetingBotStack(Stack):
         self._sessions_table_arn = sessions_table_arn
         self._projects_table_arn = projects_table_arn
         self._bot_credentials_table_arn = bot_credentials_table_arn
+        self._bot_pool_table_arn = bot_pool_table_arn
+        self._bot_pool_table_name = bot_pool_table_name
 
+        self._create_sqs_queue()
         self._create_vpc()
         self._create_security_group()
         self._create_ecs_cluster()
         self._create_task_definition()
         self._create_outputs()
+
+    def _create_sqs_queue(self) -> None:
+        """Create SQS Queue for meeting requests."""
+        self._meeting_queue = sqs.Queue(
+            self,
+            "MeetingRequestQueue",
+            queue_name=f"{self._environment}-meeting-requests",
+            visibility_timeout=Duration.minutes(15),
+            retention_period=Duration.hours(1),
+            receive_message_wait_time=Duration.seconds(20),
+        )
 
     def _create_vpc(self) -> None:
         """Create VPC for ECS Fargate."""
@@ -166,13 +184,29 @@ class MeetingBotStack(Stack):
                     "dynamodb:PutItem",
                     "dynamodb:UpdateItem",
                     "dynamodb:GetItem",
+                    "dynamodb:DeleteItem",
+                    "dynamodb:Query",
                 ],
                 resources=[
                     self._transcripts_table_arn,
                     self._sessions_table_arn,
                     self._projects_table_arn,
                     self._bot_credentials_table_arn,
+                    self._bot_pool_table_arn,
+                    f"{self._bot_pool_table_arn}/index/*",
                 ],
+            )
+        )
+
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                    "sqs:GetQueueAttributes",
+                ],
+                resources=[self._meeting_queue.queue_arn],
             )
         )
 
@@ -213,6 +247,9 @@ class MeetingBotStack(Stack):
                 "TRANSCRIBE_LANGUAGE": "en-US",
                 "AWS_REGION": self.region,
                 "ENVIRONMENT": self._environment,
+                "SQS_QUEUE_URL": self._meeting_queue.queue_url,
+                "BOT_POOL_TABLE": self._bot_pool_table_name,
+                "WARM_POOL_MODE": "true",
             },
         )
 
@@ -230,6 +267,8 @@ class MeetingBotStack(Stack):
             self, "PrivateSubnetIds",
             value=",".join([s.subnet_id for s in self._vpc.private_subnets]),
         )
+        CfnOutput(self, "MeetingQueueUrl", value=self._meeting_queue.queue_url)
+        CfnOutput(self, "MeetingQueueArn", value=self._meeting_queue.queue_arn)
 
     @property
     def cluster(self) -> ecs.Cluster:
@@ -254,3 +293,11 @@ class MeetingBotStack(Stack):
     @property
     def log_group_name(self) -> str:
         return self._log_group.log_group_name
+
+    @property
+    def meeting_queue_url(self) -> str:
+        return self._meeting_queue.queue_url
+
+    @property
+    def meeting_queue_arn(self) -> str:
+        return self._meeting_queue.queue_arn

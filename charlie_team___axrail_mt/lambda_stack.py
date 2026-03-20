@@ -65,6 +65,17 @@ class LambdaStack(Stack):
                 },
             )
         )
+        # SQS permissions for warm pool
+        self.shared_resources.lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=[
+                    "sqs:SendMessage",
+                    "sqs:GetQueueAttributes",
+                ],
+                resources=[self.meeting_bot_stack.meeting_queue_arn],
+            )
+        )
 
     def _grant_secrets_permissions(self) -> None:
         """Grant Secrets Manager permissions to Lambda role."""
@@ -98,6 +109,9 @@ class LambdaStack(Stack):
             "ECS_TASK_DEFINITION": self.meeting_bot_stack.task_definition_arn,
             "ECS_SUBNETS": ",".join(self.meeting_bot_stack.private_subnet_ids),
             "ECS_SECURITY_GROUP": self.meeting_bot_stack.security_group_id,
+            "SQS_QUEUE_URL": self.meeting_bot_stack.meeting_queue_url,
+            "BOT_POOL_TABLE": self.dynamodb_stack.bot_pool_table.table_name,
+            "WARM_POOL_ENABLED": "true",
             "ENVIRONMENT": self.env_name,
             "POWERTOOLS_SERVICE_NAME": "axrail-api",
             "LOG_LEVEL": "INFO",
@@ -243,6 +257,11 @@ class LambdaStack(Stack):
 
         self.verify_bot_credential_fn = self._create_lambda_function(
             "VerifyBotCredential", "lambdas/Functions/VerifyBotCredential"
+        )
+
+        # Warm Pool Management
+        self.start_warm_pool_fn = self._create_lambda_function(
+            "StartWarmPool", "lambdas/Functions/StartWarmPool", timeout=120
         )
 
     def _create_exports(self) -> None:
@@ -440,4 +459,11 @@ class LambdaStack(Stack):
             "VerifyBotCredentialFnArn",
             value=self.verify_bot_credential_fn.function_arn,
             export_name=f"AXRAIL-VerifyBotCredentialFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "StartWarmPoolFnArn",
+            value=self.start_warm_pool_fn.function_arn,
+            export_name=f"AXRAIL-StartWarmPoolFnArn-{self.env_name}",
         )

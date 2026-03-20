@@ -2,14 +2,18 @@
 Meeting Orchestrator Module
 
 Orchestrate meeting bot and transcription simultaneously.
+Supports two modes:
+1. Warm Pool Mode: Container stays alive, polls SQS for meeting requests
+2. Cold Start Mode: Single meeting per container (legacy)
 """
 
 import asyncio
 import json
 import logging
-import re
 import signal
 import sys
+import uuid
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -22,14 +26,15 @@ from config import (
     PROJECT_ID,
     CREDENTIAL_ID,
     MEETING_URL,
-    GMAIL_EMAIL,
-    GMAIL_PASSWORD,
     KEEP_ALIVE_INTERVAL,
     LOG_LEVEL,
     ENABLE_TRANSCRIPTION,
     AWS_REGION,
     ENVIRONMENT,
     SESSIONS_TABLE,
+    SQS_QUEUE_URL,
+    BOT_POOL_TABLE,
+    WARM_POOL_MODE,
 )
 
 logging.basicConfig(
@@ -41,20 +46,15 @@ logger = logging.getLogger(__name__)
 
 dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
 sessions_table = dynamodb.Table(SESSIONS_TABLE)
-
+sqs_client = boto3.client("sqs", region_name=AWS_REGION)
 secrets_client = boto3.client("secretsmanager", region_name=AWS_REGION)
+
+# Bot pool table (only used in warm pool mode)
+bot_pool_table = dynamodb.Table(BOT_POOL_TABLE) if BOT_POOL_TABLE else None
 
 
 def get_gmail_credentials(credential_id: str) -> tuple:
-    """
-    Get Gmail credentials from Secrets Manager.
-
-    Args:
-        credential_id: Bot credential ID for secret lookup
-
-    Returns:
-        tuple: (email, password)
-    """
+    """Get Gmail credentials from Secrets Manager."""
     secret_name = f"{ENVIRONMENT}/bot-credentials/{credential_id}"
     logger.info(f"Fetching Gmail credentials from: {secret_name}")
 
@@ -78,7 +78,7 @@ def get_gmail_credentials(credential_id: str) -> tuple:
         raise
 
 
-def update_session_status(session_id: str, status: str, task_arn: str = None) -> None:
+def update_session_status(session_id: str, status: str, task_arn: str = None, container_id: str = None) -> None:
     """Update session status in DynamoDB."""
     try:
         update_expr = "SET bot_status = :status, updated_at = :updated_at"
@@ -91,6 +91,10 @@ def update_session_status(session_id: str, status: str, task_arn: str = None) ->
             update_expr += ", task_arn = :task_arn"
             expr_values[":task_arn"] = task_arn
 
+        if container_id:
+            update_expr += ", container_id = :container_id"
+            expr_values[":container_id"] = container_id
+
         sessions_table.update_item(
             Key={"session_id": session_id},
             UpdateExpression=update_expr,
@@ -101,10 +105,105 @@ def update_session_status(session_id: str, status: str, task_arn: str = None) ->
         logger.error(f"Failed to update session status: {e}")
 
 
+class BotPoolManager:
+    """Manage bot pool registration and status updates."""
+
+    def __init__(self, container_id: str, credential_id: str):
+        self._container_id = container_id
+        self._credential_id = credential_id
+        self._current_session_id: Optional[str] = None
+
+    def register(self) -> None:
+        """Register container in bot pool as idle."""
+        if not bot_pool_table:
+            return
+
+        try:
+            bot_pool_table.put_item(Item={
+                "container_id": self._container_id,
+                "credential_id": self._credential_id,
+                "status": "idle",
+                "current_session_id": None,
+                "registered_at": datetime.now(timezone.utc).isoformat(),
+                "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+                "ttl": int(time.time()) + 86400,  
+            })
+            logger.info(f"Registered container {self._container_id} in bot pool")
+        except Exception as e:
+            logger.error(f"Failed to register in bot pool: {e}")
+
+    def set_busy(self, session_id: str) -> None:
+        """Mark container as busy with a session."""
+        if not bot_pool_table:
+            return
+
+        self._current_session_id = session_id
+        try:
+            bot_pool_table.update_item(
+                Key={"container_id": self._container_id},
+                UpdateExpression="SET #status = :status, current_session_id = :sid, last_heartbeat = :hb",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":status": "busy",
+                    ":sid": session_id,
+                    ":hb": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to set busy status: {e}")
+
+    def set_idle(self) -> None:
+        """Mark container as idle (ready for new meeting)."""
+        if not bot_pool_table:
+            return
+
+        self._current_session_id = None
+        try:
+            bot_pool_table.update_item(
+                Key={"container_id": self._container_id},
+                UpdateExpression="SET #status = :status, current_session_id = :sid, last_heartbeat = :hb",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":status": "idle",
+                    ":sid": None,
+                    ":hb": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to set idle status: {e}")
+
+    def heartbeat(self) -> None:
+        """Update heartbeat timestamp."""
+        if not bot_pool_table:
+            return
+
+        try:
+            bot_pool_table.update_item(
+                Key={"container_id": self._container_id},
+                UpdateExpression="SET last_heartbeat = :hb, #ttl = :ttl",
+                ExpressionAttributeNames={"#ttl": "ttl"},
+                ExpressionAttributeValues={
+                    ":hb": datetime.now(timezone.utc).isoformat(),
+                    ":ttl": int(time.time()) + 86400,
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to update heartbeat: {e}")
+
+    def deregister(self) -> None:
+        """Remove container from bot pool."""
+        if not bot_pool_table:
+            return
+
+        try:
+            bot_pool_table.delete_item(Key={"container_id": self._container_id})
+            logger.info(f"Deregistered container {self._container_id} from bot pool")
+        except Exception as e:
+            logger.error(f"Failed to deregister from bot pool: {e}")
+
+
 class MeetingOrchestrator:
-    """
-    Orchestrator for running meeting bot and transcription.
-    """
+    """Orchestrator for running meeting bot and transcription."""
 
     def __init__(self, gmail_email: str, gmail_password: str):
         """Initialize MeetingOrchestrator."""
@@ -113,54 +212,94 @@ class MeetingOrchestrator:
         self._is_running = False
         self._gmail_email = gmail_email
         self._gmail_password = gmail_password
+        self._page = None
+        self._is_logged_in = False
 
-    async def run(self, session_id: str, meeting_url: str) -> None:
-        """
-        Main entry point for running the orchestrator.
+    async def initialize(self) -> None:
+        """Initialize browser and login to Gmail (for warm pool mode)."""
+        logger.info("Initializing browser and logging in...")
+        self._page = await self._browser_manager.start()
+        await self._login_gmail(self._page)
+        self._is_logged_in = True
+        logger.info("Initialization complete, ready for meetings")
 
-        Args:
-            session_id: Session ID from DynamoDB
-            meeting_url: Google Meet URL to join
-        """
-        logger.info(f"Starting Meeting Orchestrator for session: {session_id}")
+    async def run_single_meeting(self, session_id: str, meeting_url: str, container_id: str = None) -> None:
+        """Run a single meeting session."""
+        logger.info(f"Starting meeting for session: {session_id}")
         logger.info(f"Meeting URL: {meeting_url}")
 
-        update_session_status(session_id, "joining")
+        update_session_status(session_id, "joining", container_id=container_id)
 
         try:
-            # Step 1: Start browser dan join meeting
-            page = await self._browser_manager.start()
-            await self._login_gmail(page)
-            await self._join_meeting(page, meeting_url)
+            if not self._is_logged_in:
+                self._page = await self._browser_manager.start()
+                await self._login_gmail(self._page)
+                self._is_logged_in = True
 
-            update_session_status(session_id, "in_meeting")
+            await self._join_meeting(self._page, meeting_url)
+            update_session_status(session_id, "in_meeting", container_id=container_id)
 
-            # Step 2: Start transcription jika enabled
             if ENABLE_TRANSCRIPTION:
                 await self._start_transcription(session_id)
 
-            # Step 3: Keep session alive
             self._is_running = True
-            await self._keep_alive(page, session_id)
+            await self._keep_alive(self._page, session_id)
 
         except Exception as e:
-            logger.exception(f"Error running orchestrator: {e}")
-            update_session_status(session_id, "failed")
+            logger.exception(f"Error in meeting: {e}")
+            update_session_status(session_id, "failed", container_id=container_id)
             raise
         finally:
-            update_session_status(session_id, "completed")
-            await self._cleanup()
+            update_session_status(session_id, "completed", container_id=container_id)
+            await self._cleanup_meeting()
+
+    async def _cleanup_meeting(self) -> None:
+        """Cleanup after a meeting (but keep browser open for warm pool)."""
+        logger.info("Cleaning up meeting...")
+
+        if self._transcribe_manager:
+            await self._transcribe_manager.stop()
+            self._transcribe_manager = None
+
+        # Leave the meeting but keep browser open
+        if self._page and self._is_logged_in:
+            try:
+                leave_btn = self._page.locator('[aria-label*="Leave call"]')
+                if await leave_btn.count() > 0:
+                    await leave_btn.first.click()
+                    await asyncio.sleep(2)
+            except Exception as e:
+                logger.warning(f"Could not click leave button: {e}")
+
+            try:
+                await self._page.goto("https://meet.google.com")
+                await self._page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception as e:
+                logger.warning(f"Could not navigate to meet homepage: {e}")
+
+        self._is_running = False
+        logger.info("Meeting cleanup complete")
+
+    async def cleanup_full(self) -> None:
+        """Full cleanup including browser shutdown."""
+        logger.info("Full cleanup...")
+        await self._cleanup_meeting()
+        await self._browser_manager.stop()
+        self._is_logged_in = False
+        self._page = None
+        logger.info("Full cleanup complete")
+
+    async def stop(self) -> None:
+        """Stop orchestrator gracefully."""
+        logger.info("Stopping orchestrator...")
+        self._is_running = False
 
     async def _start_transcription(self, session_id: str) -> None:
         """Start transcription service."""
         logger.info("Starting transcription service...")
-
-        await asyncio.sleep(5)
-
+        await asyncio.sleep(2)
         self._transcribe_manager = TranscribeStreamingManager(session_id)
-
         asyncio.create_task(self._run_transcription())
-
         logger.info("Transcription service started")
 
     async def _run_transcription(self) -> None:
@@ -169,22 +308,6 @@ class MeetingOrchestrator:
             await self._transcribe_manager.start()
         except Exception as e:
             logger.error(f"Transcription error: {e}")
-
-    async def _cleanup(self) -> None:
-        """Cleanup resources."""
-        logger.info("Cleaning up...")
-
-        if self._transcribe_manager:
-            await self._transcribe_manager.stop()
-
-        await self._browser_manager.stop()
-
-        logger.info("Cleanup complete")
-
-    async def stop(self) -> None:
-        """Stop orchestrator gracefully."""
-        logger.info("Stopping orchestrator...")
-        self._is_running = False
 
     async def _login_gmail(self, page) -> None:
         """Login to Gmail account."""
@@ -196,15 +319,24 @@ class MeetingOrchestrator:
         logger.info("Entering email...")
         await page.fill('input[type="email"]', self._gmail_email)
         await page.click('button:has-text("Next"), #identifierNext')
-        await page.wait_for_load_state("networkidle")
-        await asyncio.sleep(2)
+
+        logger.info("Waiting for password field...")
+        await page.wait_for_selector('input[type="password"]', state="visible", timeout=15000)
 
         logger.info("Entering password...")
-        await page.wait_for_selector('input[type="password"]', state="visible")
         await page.fill('input[type="password"]', self._gmail_password)
         await page.click('button:has-text("Next"), #passwordNext')
-        await page.wait_for_load_state("networkidle")
-        await asyncio.sleep(3)
+
+        logger.info("Waiting for login to complete...")
+        await page.wait_for_load_state("networkidle", timeout=15000)
+
+        try:
+            await page.wait_for_function(
+                "() => !window.location.href.includes('accounts.google.com/signin')",
+                timeout=10000
+            )
+        except Exception:
+            logger.warning("Login redirect check timed out, continuing anyway")
 
         logger.info("Gmail login successful")
 
@@ -213,14 +345,22 @@ class MeetingOrchestrator:
         logger.info(f"Joining meeting: {meeting_url}")
 
         await page.goto(meeting_url)
-        await page.wait_for_load_state("networkidle")
-        await asyncio.sleep(5)
+        await page.wait_for_load_state("networkidle", timeout=30000)
+
+        try:
+            await page.wait_for_selector(
+                '[data-meeting-title], [aria-label*="Join"], button:has-text("Join"), button:has-text("Ask to join")',
+                state="visible",
+                timeout=15000
+            )
+        except Exception:
+            logger.warning("Meet UI elements not found immediately, continuing...")
 
         try:
             dismiss_btn = page.locator('button:has-text("Dismiss")')
             if await dismiss_btn.count() > 0:
                 await dismiss_btn.click()
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
         except Exception:
             pass
 
@@ -233,9 +373,7 @@ class MeetingOrchestrator:
     async def _fill_name_if_needed(self, page) -> None:
         """Fill in name if there is a prompt for guest."""
         try:
-            name_input = page.locator(
-                'input[placeholder*="name"], input[aria-label*="name"]'
-            )
+            name_input = page.locator('input[placeholder*="name"], input[aria-label*="name"]')
             if await name_input.count() > 0:
                 await name_input.fill("Meeting Bot")
                 await asyncio.sleep(1)
@@ -247,16 +385,12 @@ class MeetingOrchestrator:
         logger.info("Disabling camera and microphone...")
 
         try:
-            camera_btn = page.locator(
-                '[aria-label*="camera"], [data-is-muted="false"][aria-label*="camera"]'
-            )
+            camera_btn = page.locator('[aria-label*="camera"], [data-is-muted="false"][aria-label*="camera"]')
             if await camera_btn.count() > 0:
                 await camera_btn.first.click()
                 await asyncio.sleep(0.5)
 
-            mic_btn = page.locator(
-                '[aria-label*="microphone"], [data-is-muted="false"][aria-label*="microphone"]'
-            )
+            mic_btn = page.locator('[aria-label*="microphone"], [data-is-muted="false"][aria-label*="microphone"]')
             if await mic_btn.count() > 0:
                 await mic_btn.first.click()
                 await asyncio.sleep(0.5)
@@ -267,8 +401,6 @@ class MeetingOrchestrator:
         """Click join meeting button."""
         logger.info("Looking for join button...")
 
-        await asyncio.sleep(5)
-
         join_selectors = [
             'button:has-text("Join now")',
             'button:has-text("Ask to join")',
@@ -277,13 +409,29 @@ class MeetingOrchestrator:
             '[jsname="Qx7uuf"]',
         ]
 
+        combined_selector = ", ".join(join_selectors)
+        try:
+            await page.wait_for_selector(combined_selector, state="visible", timeout=15000)
+        except Exception:
+            logger.warning("Join button not found within timeout")
+
         for selector in join_selectors:
             try:
                 btn = page.locator(selector)
                 if await btn.count() > 0:
                     await btn.first.click()
                     logger.info(f"Clicked join button: {selector}")
-                    await asyncio.sleep(10)
+
+                    try:
+                        await page.wait_for_selector(
+                            '[aria-label*="Leave call"], [aria-label*="Turn off microphone"], [data-meeting-title]',
+                            state="visible",
+                            timeout=20000
+                        )
+                        logger.info("Successfully entered meeting room")
+                    except Exception:
+                        logger.info("Waiting for host to admit or meeting to start...")
+                        await asyncio.sleep(3)
                     return
             except Exception:
                 continue
@@ -296,6 +444,10 @@ class MeetingOrchestrator:
 
         while self._is_running:
             try:
+                if await self._check_stop_signal(session_id):
+                    logger.info("Stop signal received, ending meeting")
+                    break
+
                 is_in_meeting = await self._check_meeting_status(page)
 
                 if not is_in_meeting:
@@ -309,6 +461,19 @@ class MeetingOrchestrator:
                 logger.error(f"Keep-alive error: {e}")
                 await asyncio.sleep(KEEP_ALIVE_INTERVAL)
 
+    async def _check_stop_signal(self, session_id: str) -> bool:
+        """Check if stop signal was sent for this session."""
+        try:
+            response = sessions_table.get_item(
+                Key={"session_id": session_id},
+                ProjectionExpression="stop_requested, bot_status"
+            )
+            item = response.get("Item", {})
+            return item.get("stop_requested", False) or item.get("bot_status") == "stopping"
+        except Exception as e:
+            logger.warning(f"Error checking stop signal: {e}")
+            return False
+
     async def _check_meeting_status(self, page) -> bool:
         """Check if still in meeting."""
         try:
@@ -319,7 +484,6 @@ class MeetingOrchestrator:
                 logger.warning(f"URL changed, no longer on Google Meet: {current_url}")
                 return False
 
-            # Check for "removed from meeting" or "meeting ended" indicators
             removed_indicators = [
                 'text="You\'ve been removed from the meeting"',
                 'text="The meeting has ended"',
@@ -336,7 +500,6 @@ class MeetingOrchestrator:
                 except Exception:
                     pass
 
-            # Check for active meeting indicators
             meeting_indicators = [
                 "[data-meeting-title]",
                 '[aria-label*="Leave call"]',
@@ -353,7 +516,6 @@ class MeetingOrchestrator:
                 except Exception:
                     pass
 
-            # If no indicators found, assume still in meeting (avoid false positives)
             logger.debug("No meeting indicators found, assuming still in meeting")
             return True
 
@@ -362,8 +524,135 @@ class MeetingOrchestrator:
             return True
 
 
-async def main():
-    """Main function."""
+async def poll_sqs_for_meetings(orchestrator: MeetingOrchestrator, pool_manager: BotPoolManager, credential_id: str) -> None:
+    """Poll SQS for meeting requests (warm pool mode)."""
+    logger.info(f"Starting SQS polling for credential: {credential_id}")
+
+    while True:
+        try:
+            pool_manager.heartbeat()
+
+            response = sqs_client.receive_message(
+                QueueUrl=SQS_QUEUE_URL,
+                MaxNumberOfMessages=1,
+                WaitTimeSeconds=20,
+                MessageAttributeNames=["All"],
+            )
+
+            messages = response.get("Messages", [])
+
+            if not messages:
+                logger.debug("No messages in queue, continuing to poll...")
+                continue
+
+            message = messages[0]
+            receipt_handle = message["ReceiptHandle"]
+
+            try:
+                body = json.loads(message["Body"])
+                msg_credential_id = body.get("credential_id")
+
+                if msg_credential_id != credential_id:
+                    logger.debug(f"Message for different credential ({msg_credential_id}), skipping")
+                    continue
+
+                session_id = body.get("session_id")
+                meeting_url = body.get("meeting_url")
+
+                if not session_id or not meeting_url:
+                    logger.warning(f"Invalid message format: {body}")
+                    sqs_client.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt_handle)
+                    continue
+
+                logger.info(f"Received meeting request: session={session_id}, url={meeting_url}")
+
+                # Delete message from queue before processing
+                sqs_client.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt_handle)
+
+                # Mark as busy and process meeting
+                pool_manager.set_busy(session_id)
+
+                try:
+                    await orchestrator.run_single_meeting(
+                        session_id=session_id,
+                        meeting_url=meeting_url,
+                        container_id=pool_manager._container_id,
+                    )
+                except Exception as e:
+                    logger.error(f"Meeting failed: {e}")
+
+                # Mark as idle after meeting
+                pool_manager.set_idle()
+                logger.info("Ready for next meeting")
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse message: {e}")
+                sqs_client.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=receipt_handle)
+
+        except Exception as e:
+            logger.error(f"Error polling SQS: {e}")
+            await asyncio.sleep(5)
+
+
+async def main_warm_pool():
+    """Main function for warm pool mode."""
+    if not CREDENTIAL_ID:
+        logger.error("CREDENTIAL_ID must be set for warm pool mode")
+        sys.exit(1)
+
+    if not SQS_QUEUE_URL:
+        logger.error("SQS_QUEUE_URL must be set for warm pool mode")
+        sys.exit(1)
+
+    container_id = str(uuid.uuid4())
+    logger.info(f"Starting warm pool container: {container_id}")
+
+    gmail_email, gmail_password = get_gmail_credentials(CREDENTIAL_ID)
+
+    if not gmail_email or not gmail_password:
+        logger.error("Gmail credentials not found")
+        sys.exit(1)
+
+    orchestrator = MeetingOrchestrator(gmail_email, gmail_password)
+    pool_manager = BotPoolManager(container_id, CREDENTIAL_ID)
+
+    shutdown_event = asyncio.Event()
+
+    def signal_handler(sig, frame):
+        logger.info(f"Received signal {sig}, shutting down...")
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        # Initialize browser and login
+        await orchestrator.initialize()
+
+        # Register in pool
+        pool_manager.register()
+
+        # Start polling
+        poll_task = asyncio.create_task(
+            poll_sqs_for_meetings(orchestrator, pool_manager, CREDENTIAL_ID)
+        )
+
+        # Wait for shutdown signal
+        await shutdown_event.wait()
+
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
+
+    finally:
+        pool_manager.deregister()
+        await orchestrator.cleanup_full()
+
+
+async def main_cold_start():
+    """Main function for cold start mode (legacy)."""
     if not SESSION_ID:
         logger.error("SESSION_ID must be set")
         sys.exit(1)
@@ -380,7 +669,6 @@ async def main():
         logger.error("MEETING_URL must be set")
         sys.exit(1)
 
-    # Get Gmail credentials from Secrets Manager using credential_id
     gmail_email, gmail_password = get_gmail_credentials(CREDENTIAL_ID)
 
     if not gmail_email or not gmail_password:
@@ -396,7 +684,20 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    await orchestrator.run(SESSION_ID, MEETING_URL)
+    try:
+        await orchestrator.run_single_meeting(SESSION_ID, MEETING_URL)
+    finally:
+        await orchestrator.cleanup_full()
+
+
+async def main():
+    """Main entry point - choose mode based on environment."""
+    if WARM_POOL_MODE:
+        logger.info("Running in WARM POOL mode")
+        await main_warm_pool()
+    else:
+        logger.info("Running in COLD START mode")
+        await main_cold_start()
 
 
 if __name__ == "__main__":

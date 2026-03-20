@@ -29,6 +29,13 @@ SESSIONS_TABLE = os.environ.get("SESSIONS_TABLE", f"{ENVIRONMENT}-Sessions")
 TRANSCRIPTS_TABLE = os.environ.get("TRANSCRIPTS_TABLE", f"{ENVIRONMENT}-Transcripts")
 
 # ==============================================================================
+# Warm Pool Configuration
+# ==============================================================================
+WARM_POOL_MODE = os.environ.get("WARM_POOL_MODE", "false").lower() == "true"
+SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
+BOT_POOL_TABLE = os.environ.get("BOT_POOL_TABLE", f"{ENVIRONMENT}-BotPool")
+
+# ==============================================================================
 # Browser Configuration
 # ==============================================================================
 BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "true").lower() == "true"

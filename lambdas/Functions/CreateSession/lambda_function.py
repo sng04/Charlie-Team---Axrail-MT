@@ -2,7 +2,10 @@
 CreateSession Lambda Function
 
 Creates a new session linked to a project in DynamoDB.
-Automatically triggers Meeting Bot to join the meeting if meeting_link is provided.
+Supports two modes:
+1. Warm Pool Mode (default): Sends meeting request to SQS for pre-warmed containers
+2. Cold Start Mode: Starts new ECS task directly (fallback)
+
 Validates that project has a verified and active bot credential before starting bot.
 """
 
@@ -22,15 +25,19 @@ tracer = Tracer()
 
 dynamodb = boto3.resource("dynamodb")
 ecs_client = boto3.client("ecs")
+sqs_client = boto3.client("sqs")
 
 sessions_table = dynamodb.Table(os.environ.get("SESSIONS_TABLE"))
 projects_table = dynamodb.Table(os.environ.get("PROJECTS_TABLE"))
 bot_credentials_table = dynamodb.Table(os.environ.get("BOT_CREDENTIALS_TABLE"))
+bot_pool_table = dynamodb.Table(os.environ.get("BOT_POOL_TABLE", ""))
 
 ECS_CLUSTER = os.environ.get("ECS_CLUSTER")
 ECS_TASK_DEFINITION = os.environ.get("ECS_TASK_DEFINITION")
 ECS_SUBNETS = os.environ.get("ECS_SUBNETS", "").split(",")
 ECS_SECURITY_GROUP = os.environ.get("ECS_SECURITY_GROUP")
+SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
+WARM_POOL_ENABLED = os.environ.get("WARM_POOL_ENABLED", "true").lower() == "true"
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
 
 
@@ -96,6 +103,69 @@ def _get_bot_credential(project: dict) -> dict:
         )
 
     return credential
+
+
+def _check_warm_pool_available(credential_id: str) -> bool:
+    """Check if there's an idle warm container for this credential."""
+    if not bot_pool_table.table_name:
+        return False
+
+    try:
+        response = bot_pool_table.query(
+            IndexName="credential-status-index",
+            KeyConditionExpression="credential_id = :cid AND #status = :status",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":cid": credential_id,
+                ":status": "idle",
+            },
+            Limit=1,
+        )
+        return len(response.get("Items", [])) > 0
+    except Exception as e:
+        logger.warning(f"Error checking warm pool: {e}")
+        return False
+
+
+def _send_to_warm_pool(
+    session_id: str, project_id: str, credential_id: str, meeting_link: str
+) -> bool:
+    """
+    Send meeting request to SQS for warm pool containers.
+
+    Returns:
+        bool: True if message sent successfully
+    """
+    if not SQS_QUEUE_URL:
+        logger.warning("SQS_QUEUE_URL not configured")
+        return False
+
+    try:
+        message = {
+            "session_id": session_id,
+            "project_id": project_id,
+            "credential_id": credential_id,
+            "meeting_url": meeting_link,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        send_params = {
+            "QueueUrl": SQS_QUEUE_URL,
+            "MessageBody": json.dumps(message),
+        }
+
+        # Only add MessageGroupId for FIFO queues
+        if ".fifo" in SQS_QUEUE_URL:
+            send_params["MessageGroupId"] = credential_id
+
+        sqs_client.send_message(**send_params)
+
+        logger.info(f"Sent meeting request to warm pool for session: {session_id}")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to send to warm pool: {e}")
+        return False
 
 
 def _start_meeting_bot(
@@ -188,17 +258,35 @@ def lambda_handler(event, context):
             "updated_at": now,
         }
 
-        # Start Meeting Bot with credential_id
-        task_arn = _start_meeting_bot(
-            session_id,
-            data["project_id"],
-            credential["credential_id"],
-            data["meeting_link"],
-        )
+        # Try warm pool first if enabled
+        use_warm_pool = WARM_POOL_ENABLED and _check_warm_pool_available(credential["credential_id"])
 
-        if task_arn:
-            item["task_arn"] = task_arn
-            item["bot_status"] = "starting"
+        if use_warm_pool:
+            sent = _send_to_warm_pool(
+                session_id,
+                data["project_id"],
+                credential["credential_id"],
+                data["meeting_link"],
+            )
+            if sent:
+                item["bot_status"] = "queued"
+                item["dispatch_mode"] = "warm_pool"
+                logger.info(f"Session {session_id} queued for warm pool")
+            else:
+                use_warm_pool = False
+
+        # Fallback to cold start if warm pool not available or failed
+        if not use_warm_pool:
+            task_arn = _start_meeting_bot(
+                session_id,
+                data["project_id"],
+                credential["credential_id"],
+                data["meeting_link"],
+            )
+            if task_arn:
+                item["task_arn"] = task_arn
+                item["bot_status"] = "starting"
+                item["dispatch_mode"] = "cold_start"
 
         sessions_table.put_item(Item=item)
 
