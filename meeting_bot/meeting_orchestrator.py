@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import boto3
+import requests
 
 from browser_manager import BrowserManager
 from transcribe_handler import TranscribeStreamingManager
@@ -35,6 +36,7 @@ from config import (
     SQS_QUEUE_URL,
     BOT_POOL_TABLE,
     WARM_POOL_MODE,
+    ECS_CONTAINER_METADATA_URI,
 )
 
 logging.basicConfig(
@@ -50,6 +52,22 @@ sqs_client = boto3.client("sqs", region_name=AWS_REGION)
 secrets_client = boto3.client("secretsmanager", region_name=AWS_REGION)
 
 bot_pool_table = dynamodb.Table(BOT_POOL_TABLE) if BOT_POOL_TABLE else None
+
+
+def get_task_arn() -> Optional[str]:
+    """Get ECS task ARN from metadata endpoint."""
+    if not ECS_CONTAINER_METADATA_URI:
+        return None
+    
+    try:
+        response = requests.get(f"{ECS_CONTAINER_METADATA_URI}/task", timeout=5)
+        if response.status_code == 200:
+            metadata = response.json()
+            return metadata.get("TaskARN")
+    except Exception as e:
+        logger.warning(f"Failed to get task ARN from metadata: {e}")
+    
+    return None
 
 
 def get_gmail_credentials(credential_id: str) -> tuple:
@@ -110,29 +128,55 @@ def update_session_status(session_id: str, status: str, task_arn: str = None, co
 class BotPoolManager:
     """Manage bot pool registration and status updates."""
 
-    def __init__(self, container_id: str, credential_id: str):
+    def __init__(self, container_id: str, credential_id: str, task_arn: str = None):
         self._container_id = container_id
         self._credential_id = credential_id
+        self._task_arn = task_arn
         self._current_session_id: Optional[str] = None
 
     def register(self) -> None:
-        """Register container in bot pool as idle."""
+        """Update container status to idle (record created by StartWarmPool Lambda)."""
         if not bot_pool_table:
             return
 
         try:
+            container_id = self._task_arn.split("/")[-1] if self._task_arn else self._container_id
+            
+            bot_pool_table.update_item(
+                Key={"container_id": container_id},
+                UpdateExpression="SET #status = :status, last_heartbeat = :hb",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={
+                    ":status": "idle",
+                    ":hb": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            self._container_id = container_id
+            logger.info(f"Updated container {container_id} status to 'idle'")
+        except Exception as e:
+            logger.error(f"Failed to update status to idle: {e}")
+            # Fallback: create new entry if update fails
+            self._register_fallback()
+
+    def _register_fallback(self) -> None:
+        """Fallback: create new entry if update fails."""
+        try:
+            container_id = self._task_arn.split("/")[-1] if self._task_arn else self._container_id
+            
             bot_pool_table.put_item(Item={
-                "container_id": self._container_id,
+                "container_id": container_id,
                 "credential_id": self._credential_id,
+                "task_arn": self._task_arn,
                 "status": "idle",
                 "current_session_id": None,
                 "registered_at": datetime.now(timezone.utc).isoformat(),
                 "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-                "ttl": int(time.time()) + 86400,  
+                "ttl": int(time.time()) + 86400,
             })
-            logger.info(f"Registered container {self._container_id} in bot pool")
+            self._container_id = container_id
+            logger.info(f"Fallback: Created new bot pool entry for {container_id}")
         except Exception as e:
-            logger.error(f"Failed to register in bot pool: {e}")
+            logger.error(f"Fallback registration also failed: {e}")
 
     def set_busy(self, session_id: str) -> None:
         """Mark container as busy with a session."""
@@ -617,7 +661,6 @@ async def poll_sqs_for_meetings(orchestrator: MeetingOrchestrator, pool_manager:
                 except Exception as e:
                     logger.error(f"Meeting failed: {e}")
 
-                # Mark as idle after meeting
                 pool_manager.set_idle()
                 logger.info("Ready for next meeting")
 
@@ -641,7 +684,8 @@ async def main_warm_pool():
         sys.exit(1)
 
     container_id = str(uuid.uuid4())
-    logger.info(f"Starting warm pool container: {container_id}")
+    task_arn = get_task_arn()
+    logger.info(f"Starting warm pool container: {container_id} (task_arn: {task_arn})")
 
     gmail_email, gmail_password = get_gmail_credentials(CREDENTIAL_ID)
 
@@ -650,7 +694,7 @@ async def main_warm_pool():
         sys.exit(1)
 
     orchestrator = MeetingOrchestrator(gmail_email, gmail_password)
-    pool_manager = BotPoolManager(container_id, CREDENTIAL_ID)
+    pool_manager = BotPoolManager(container_id, CREDENTIAL_ID, task_arn)
 
     shutdown_event = asyncio.Event()
 
@@ -662,18 +706,14 @@ async def main_warm_pool():
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        # Initialize browser and login
         await orchestrator.initialize()
 
-        # Register in pool
         pool_manager.register()
 
-        # Start polling
         poll_task = asyncio.create_task(
             poll_sqs_for_meetings(orchestrator, pool_manager, CREDENTIAL_ID)
         )
 
-        # Wait for shutdown signal
         await shutdown_event.wait()
 
         poll_task.cancel()

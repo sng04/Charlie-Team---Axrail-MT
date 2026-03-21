@@ -405,6 +405,15 @@ class ApiServicesStack(Stack):
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
 
+        # POST /warm-pool/stop - Stop/scale down warm pool containers (admin only)
+        stop_resource = warm_pool_resource.add_resource("stop")
+        stop_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.stop_warm_pool_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
     def _create_exports(self) -> None:
         CfnOutput(
             self,

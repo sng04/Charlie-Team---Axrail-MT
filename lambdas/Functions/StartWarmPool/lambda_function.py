@@ -152,6 +152,9 @@ def _start_warm_container(credential_id: str) -> str:
         if response.get("tasks"):
             task_arn = response["tasks"][0]["taskArn"]
             logger.info(f"Started warm container for {credential_id}: {task_arn}")
+            
+            _create_bot_pool_entry(credential_id, task_arn)
+            
             return task_arn
         else:
             failures = response.get("failures", [])
@@ -161,6 +164,32 @@ def _start_warm_container(credential_id: str) -> str:
     except Exception as e:
         logger.error(f"Error starting warm container: {e}")
         return None
+
+
+def _create_bot_pool_entry(credential_id: str, task_arn: str) -> None:
+    """Create bot pool entry with 'starting' status."""
+    if not bot_pool_table.table_name:
+        return
+
+    try:
+        import time
+        from datetime import datetime, timezone
+        
+        task_id = task_arn.split("/")[-1]
+        
+        bot_pool_table.put_item(Item={
+            "container_id": task_id,
+            "credential_id": credential_id,
+            "task_arn": task_arn,
+            "status": "starting",
+            "current_session_id": None,
+            "registered_at": datetime.now(timezone.utc).isoformat(),
+            "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+            "ttl": int(time.time()) + 86400,
+        })
+        logger.info(f"Created bot pool entry with status 'starting': {task_id}")
+    except Exception as e:
+        logger.warning(f"Error creating bot pool entry: {e}")
 
 
 @tracer.capture_lambda_handler
@@ -182,14 +211,12 @@ def lambda_handler(event, context):
         override_containers = data.get("containers_per_credential")
         
         if credential_ids:
-            # Warm specific credentials
             credentials = []
             for cid in credential_ids:
                 response = bot_credentials_table.get_item(Key={"credential_id": cid})
                 if "Item" in response:
                     credentials.append(response["Item"])
         else:
-            # Warm all active credentials
             credentials = _get_active_credentials()
         
         if not credentials:
@@ -200,11 +227,8 @@ def lambda_handler(event, context):
         for credential in credentials:
             credential_id = credential["credential_id"]
             
-            # Use override if provided, otherwise use credential's warm_pool_size (default: 1)
             target_containers = int(override_containers if override_containers else credential.get("warm_pool_size", 1))
             
-            # Check how many ECS tasks are already running for this credential
-            # This is more reliable than checking DynamoDB because tasks may not have registered yet
             existing_running = _count_running_tasks_for_credential(credential_id)
             needed = max(0, target_containers - existing_running)
             
