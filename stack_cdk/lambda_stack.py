@@ -71,7 +71,13 @@ class LambdaStack(Stack):
         self._create_exports()
 
     def _create_lambda_layers(self) -> None:
-        """Create Lambda layers for shared code."""
+        """Create Lambda layers for shared code.
+
+        Layer ARNs are stored in SSM Parameter Store so that other stacks
+        (e.g. ApiServicesStack) can look them up without creating fragile
+        CloudFormation cross-stack exports.  Direct construct references
+        across stacks cause UPDATE_ROLLBACK when the layer content changes.
+        """
         self.shared_layer = _lambda.LayerVersion(
             self,
             "SharedLayer",
@@ -88,6 +94,25 @@ class LambdaStack(Stack):
             code=_lambda.Code.from_asset("lambdas/Layers/PowertoolsLayer"),
             compatible_runtimes=[_lambda.Runtime.PYTHON_3_11],
             description="AWS Lambda Powertools for logging and tracing",
+        )
+
+        # Publish layer ARNs to SSM so dependent stacks can import them
+        # without CloudFormation cross-stack exports.
+        from aws_cdk import aws_ssm as ssm
+
+        ssm.StringParameter(
+            self,
+            "SharedLayerArnParam",
+            parameter_name=f"/axrail/{self.env_name}/shared-layer-arn",
+            string_value=self.shared_layer.layer_version_arn,
+            description="SharedLayer ARN for cross-stack lookup",
+        )
+        ssm.StringParameter(
+            self,
+            "PowertoolsLayerArnParam",
+            parameter_name=f"/axrail/{self.env_name}/powertools-layer-arn",
+            string_value=self.powertools_layer.layer_version_arn,
+            description="PowertoolsLayer ARN for cross-stack lookup",
         )
 
         self.opensearch_layer = _lambda.LayerVersion(

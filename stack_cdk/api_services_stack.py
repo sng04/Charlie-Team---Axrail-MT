@@ -4,6 +4,7 @@ from aws_cdk import (
     aws_apigateway as apigw,
     aws_lambda as _lambda,
     aws_iam as iam,
+    aws_ssm as ssm,
     CfnOutput,
 )
 from constructs import Construct
@@ -26,7 +27,22 @@ class ApiServicesStack(Stack):
         
         self.env_name = env_name
         self.lambda_stack = lambda_stack
-        
+
+        # Look up layer ARNs from SSM instead of using direct cross-stack
+        # construct references (which create fragile CloudFormation exports).
+        shared_layer_arn = ssm.StringParameter.value_for_string_parameter(
+            self, f"/axrail/{env_name}/shared-layer-arn"
+        )
+        powertools_layer_arn = ssm.StringParameter.value_for_string_parameter(
+            self, f"/axrail/{env_name}/powertools-layer-arn"
+        )
+        self._shared_layer = _lambda.LayerVersion.from_layer_version_arn(
+            self, "ImportedSharedLayer", shared_layer_arn
+        )
+        self._powertools_layer = _lambda.LayerVersion.from_layer_version_arn(
+            self, "ImportedPowertoolsLayer", powertools_layer_arn
+        )
+
         self._create_api_gateway()
         self._create_admin_authorizer_lambda()
         self._create_auth_authorizer_lambda()
@@ -74,8 +90,8 @@ class ApiServicesStack(Stack):
             code=_lambda.Code.from_asset("lambdas/Functions/AdminAuthorizer"),
             role=self.lambda_stack.lambda_role,
             layers=[
-                self.lambda_stack.shared_layer,
-                self.lambda_stack.powertools_layer,
+                self._shared_layer,
+                self._powertools_layer,
             ],
             environment={
                 "POWERTOOLS_SERVICE_NAME": "axrail-authorizer",
@@ -97,8 +113,8 @@ class ApiServicesStack(Stack):
             code=_lambda.Code.from_asset("lambdas/Functions/AuthAuthorizer"),
             role=self.lambda_stack.lambda_role,
             layers=[
-                self.lambda_stack.shared_layer,
-                self.lambda_stack.powertools_layer,
+                self._shared_layer,
+                self._powertools_layer,
             ],
             environment={
                 "POWERTOOLS_SERVICE_NAME": "axrail-authorizer",
