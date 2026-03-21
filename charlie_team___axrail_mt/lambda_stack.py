@@ -4,6 +4,8 @@ from aws_cdk import (
     CustomResource,
     aws_lambda as _lambda,
     aws_iam as iam,
+    aws_events as events,
+    aws_events_targets as targets,
     custom_resources as cr,
     CfnOutput,
 )
@@ -50,6 +52,7 @@ class LambdaStack(Stack):
         self._grant_secrets_permissions()
         self._grant_cloudformation_permissions()
         self._create_lambda_functions()
+        self._create_ecs_task_state_handler()
         self._create_seed_admin()
         self._create_exports()
 
@@ -385,6 +388,50 @@ class LambdaStack(Stack):
 
         self.stop_warm_pool_fn = self._create_lambda_function(
             "StopWarmPool", "lambdas/Functions/StopWarmPool", timeout=120
+        )
+
+    def _create_ecs_task_state_handler(self) -> None:
+        """Create Lambda and EventBridge rule to handle ECS task state changes."""
+        self.handle_ecs_task_state_fn = _lambda.Function(
+            self,
+            "HandleEcsTaskState",
+            function_name=f"AXRAIL-HandleEcsTaskState-{self.env_name}",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("lambdas/Functions/HandleEcsTaskState"),
+            role=self.lambda_role,
+            layers=[
+                self.shared_layer,
+                self.powertools_layer,
+            ],
+            environment={
+                "BOT_POOL_TABLE": self.dynamodb_stack.bot_pool_table.table_name,
+                "ECS_CLUSTER_NAME": self.meeting_bot_stack.cluster.cluster_name,
+                "POWERTOOLS_SERVICE_NAME": "axrail-ecs-handler",
+                "LOG_LEVEL": "INFO",
+            },
+            timeout=Duration.seconds(30),
+            memory_size=128,
+            tracing=_lambda.Tracing.ACTIVE,
+        )
+
+        self.ecs_task_state_rule = events.Rule(
+            self,
+            "EcsTaskStateRule",
+            rule_name=f"AXRAIL-EcsTaskStateRule-{self.env_name}",
+            description="Capture ECS task state changes for warm pool cleanup",
+            event_pattern=events.EventPattern(
+                source=["aws.ecs"],
+                detail_type=["ECS Task State Change"],
+                detail={
+                    "clusterArn": [self.meeting_bot_stack.cluster.cluster_arn],
+                    "lastStatus": ["STOPPED"],
+                },
+            ),
+        )
+
+        self.ecs_task_state_rule.add_target(
+            targets.LambdaFunction(self.handle_ecs_task_state_fn)
         )
 
     def _create_seed_admin(self) -> None:

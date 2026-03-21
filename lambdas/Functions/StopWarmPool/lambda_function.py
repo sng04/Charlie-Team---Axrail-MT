@@ -94,29 +94,19 @@ def _get_idle_task_arns(credential_id: str, task_arns: list) -> list:
             },
         )
         
-        idle_task_arns = set()
-        containers_without_task_arn = 0
-        
+        # container_id is now task_id (last part of task_arn)
+        idle_task_ids = set()
         for item in response.get("Items", []):
-            task_arn = item.get("task_arn")
-            if task_arn:
-                idle_task_arns.add(task_arn)
-            else:
-                containers_without_task_arn += 1
+            idle_task_ids.add(item.get("container_id"))
         
-        if containers_without_task_arn > 0:
-            logger.warning(f"Found {containers_without_task_arn} idle containers without task_arn for credential {credential_id}")
+        # Filter task_arns where task_id is in idle set
+        idle_task_arns = []
+        for task_arn in task_arns:
+            task_id = task_arn.split("/")[-1]
+            if task_id in idle_task_ids:
+                idle_task_arns.append(task_arn)
         
-        # Filter task_arns to only include idle ones
-        idle_filtered = [arn for arn in task_arns if arn in idle_task_arns]
-        
-        # If no idle containers found in DynamoDB but tasks exist, 
-        # they might be old containers without task_arn - treat as stoppable
-        if not idle_filtered and not idle_task_arns and containers_without_task_arn > 0:
-            logger.info(f"No task_arn matches found, but {containers_without_task_arn} idle containers exist - allowing stop")
-            return task_arns[:containers_without_task_arn]
-        
-        return idle_filtered
+        return idle_task_arns
     except Exception as e:
         logger.warning(f"Error getting idle containers: {e}")
         return task_arns
@@ -164,45 +154,10 @@ def _cleanup_bot_pool_entry(credential_id: str, task_arn: str) -> None:
         return
 
     try:
-        # Query idle entries first (most likely status for stopped tasks)
-        response = bot_pool_table.query(
-            IndexName="credential-status-index",
-            KeyConditionExpression="credential_id = :cid AND #status = :status",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
-                ":cid": credential_id,
-                ":status": "idle",
-            },
-        )
+        task_id = task_arn.split("/")[-1]
         
-        for item in response.get("Items", []):
-            if item.get("task_arn") == task_arn:
-                bot_pool_table.delete_item(
-                    Key={"container_id": item["container_id"]}
-                )
-                logger.info(f"Cleaned up bot pool entry: {item['container_id']}")
-                return
-        
-        # If not found in idle, check busy (edge case)
-        response = bot_pool_table.query(
-            IndexName="credential-status-index",
-            KeyConditionExpression="credential_id = :cid AND #status = :status",
-            ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
-                ":cid": credential_id,
-                ":status": "busy",
-            },
-        )
-        
-        for item in response.get("Items", []):
-            if item.get("task_arn") == task_arn:
-                bot_pool_table.delete_item(
-                    Key={"container_id": item["container_id"]}
-                )
-                logger.info(f"Cleaned up bot pool entry: {item['container_id']}")
-                return
-        
-        logger.warning(f"Bot pool entry not found for task_arn: {task_arn}")
+        bot_pool_table.delete_item(Key={"container_id": task_id})
+        logger.info(f"Cleaned up bot pool entry: {task_id}")
     except Exception as e:
         logger.warning(f"Error cleaning up bot pool entry: {e}")
 
