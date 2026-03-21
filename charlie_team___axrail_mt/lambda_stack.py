@@ -383,6 +383,10 @@ class LambdaStack(Stack):
             "StartWarmPool", "lambdas/Functions/StartWarmPool", timeout=120
         )
 
+        self.stop_warm_pool_fn = self._create_lambda_function(
+            "StopWarmPool", "lambdas/Functions/StopWarmPool", timeout=120
+        )
+
     def _create_seed_admin(self) -> None:
         """Create SeedAdmin Lambda and Custom Resource for initial admin user."""
         self.seed_admin_role = iam.Role(
@@ -658,6 +662,13 @@ class LambdaStack(Stack):
             "StartWarmPoolFnArn",
             value=self.start_warm_pool_fn.function_arn,
             export_name=f"AXRAIL-StartWarmPoolFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "StopWarmPoolFnArn",
+            value=self.stop_warm_pool_fn.function_arn,
+            export_name=f"AXRAIL-StopWarmPoolFnArn-{self.env_name}",
         )
 
         CfnOutput(

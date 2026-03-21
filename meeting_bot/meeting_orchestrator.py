@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import boto3
+import requests
 
 from browser_manager import BrowserManager
 from transcribe_handler import TranscribeStreamingManager
@@ -35,6 +36,7 @@ from config import (
     SQS_QUEUE_URL,
     BOT_POOL_TABLE,
     WARM_POOL_MODE,
+    ECS_CONTAINER_METADATA_URI,
 )
 
 logging.basicConfig(
@@ -50,6 +52,22 @@ sqs_client = boto3.client("sqs", region_name=AWS_REGION)
 secrets_client = boto3.client("secretsmanager", region_name=AWS_REGION)
 
 bot_pool_table = dynamodb.Table(BOT_POOL_TABLE) if BOT_POOL_TABLE else None
+
+
+def get_task_arn() -> Optional[str]:
+    """Get ECS task ARN from metadata endpoint."""
+    if not ECS_CONTAINER_METADATA_URI:
+        return None
+    
+    try:
+        response = requests.get(f"{ECS_CONTAINER_METADATA_URI}/task", timeout=5)
+        if response.status_code == 200:
+            metadata = response.json()
+            return metadata.get("TaskARN")
+    except Exception as e:
+        logger.warning(f"Failed to get task ARN from metadata: {e}")
+    
+    return None
 
 
 def get_gmail_credentials(credential_id: str) -> tuple:
@@ -110,9 +128,10 @@ def update_session_status(session_id: str, status: str, task_arn: str = None, co
 class BotPoolManager:
     """Manage bot pool registration and status updates."""
 
-    def __init__(self, container_id: str, credential_id: str):
+    def __init__(self, container_id: str, credential_id: str, task_arn: str = None):
         self._container_id = container_id
         self._credential_id = credential_id
+        self._task_arn = task_arn
         self._current_session_id: Optional[str] = None
 
     def register(self) -> None:
@@ -121,16 +140,21 @@ class BotPoolManager:
             return
 
         try:
-            bot_pool_table.put_item(Item={
+            item = {
                 "container_id": self._container_id,
                 "credential_id": self._credential_id,
                 "status": "idle",
                 "current_session_id": None,
                 "registered_at": datetime.now(timezone.utc).isoformat(),
                 "last_heartbeat": datetime.now(timezone.utc).isoformat(),
-                "ttl": int(time.time()) + 86400,  
-            })
-            logger.info(f"Registered container {self._container_id} in bot pool")
+                "ttl": int(time.time()) + 86400,
+            }
+            
+            if self._task_arn:
+                item["task_arn"] = self._task_arn
+            
+            bot_pool_table.put_item(Item=item)
+            logger.info(f"Registered container {self._container_id} in bot pool (task_arn: {self._task_arn})")
         except Exception as e:
             logger.error(f"Failed to register in bot pool: {e}")
 
@@ -641,7 +665,8 @@ async def main_warm_pool():
         sys.exit(1)
 
     container_id = str(uuid.uuid4())
-    logger.info(f"Starting warm pool container: {container_id}")
+    task_arn = get_task_arn()
+    logger.info(f"Starting warm pool container: {container_id} (task_arn: {task_arn})")
 
     gmail_email, gmail_password = get_gmail_credentials(CREDENTIAL_ID)
 
@@ -650,7 +675,7 @@ async def main_warm_pool():
         sys.exit(1)
 
     orchestrator = MeetingOrchestrator(gmail_email, gmail_password)
-    pool_manager = BotPoolManager(container_id, CREDENTIAL_ID)
+    pool_manager = BotPoolManager(container_id, CREDENTIAL_ID, task_arn)
 
     shutdown_event = asyncio.Event()
 

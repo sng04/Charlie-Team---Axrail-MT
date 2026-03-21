@@ -35,6 +35,9 @@ WARM_POOL_MODE = os.environ.get("WARM_POOL_MODE", "false").lower() == "true"
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 BOT_POOL_TABLE = os.environ.get("BOT_POOL_TABLE", f"{ENVIRONMENT}-BotPool")
 
+# ECS Task ARN (from metadata endpoint or environment)
+ECS_CONTAINER_METADATA_URI = os.environ.get("ECS_CONTAINER_METADATA_URI_V4", "")
+
 # ==============================================================================
 # Browser Configuration
 # ==============================================================================
