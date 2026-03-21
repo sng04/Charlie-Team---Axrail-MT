@@ -3,12 +3,13 @@ import os
 
 import aws_cdk as cdk
 
-from charlie_team___axrail_mt.dynamodb_stack import DynamoDBStack
-from charlie_team___axrail_mt.cognito_stack import CognitoStack
-from charlie_team___axrail_mt.meeting_bot_stack import MeetingBotStack
-from charlie_team___axrail_mt.lambda_stack import LambdaStack
-from charlie_team___axrail_mt.api_services_stack import ApiServicesStack
-from charlie_team___axrail_mt.environment import get_environment
+from stack_cdk.dynamodb_stack import DynamoDBStack
+from stack_cdk.cognito_stack import CognitoStack
+from stack_cdk.meeting_bot_stack import MeetingBotStack
+from stack_cdk.lambda_stack import LambdaStack
+from stack_cdk.api_services_stack import ApiServicesStack
+from stack_cdk.bedrock_agent_stack import BedrockAgentStack
+from stack_cdk.environment import get_environment
 
 
 app = cdk.App()
@@ -25,6 +26,7 @@ dynamodb_stack = DynamoDBStack(
     app,
     f"AXRAIL-DynamoDB-{environment}",
     env_name=environment,
+    env_config=env_config,
     env=env,
 )
 
@@ -58,6 +60,7 @@ lambda_stack = LambdaStack(
     ses_sender_email=env_config["ses_sender_email"],
     admin_email=env_config["admin_email"],
     admin_temp_password=env_config["admin_temp_password"],
+    env_config=env_config,
     env=env,
 )
 
@@ -76,5 +79,17 @@ lambda_stack.add_dependency(meeting_bot_stack)
 meeting_bot_stack.add_dependency(dynamodb_stack)
 
 api_services_stack.add_dependency(lambda_stack)
+
+# Bedrock Agent stack (deployed to us-east-1, cross-region)
+env_us_east_1 = cdk.Environment(
+    account=env_config["account"],
+    region=env_config["bedrock_region"],
+)
+
+bedrock_stack = BedrockAgentStack(
+    app,
+    f"AXRAIL-BedrockAgent-{environment}",
+    env=env_us_east_1,
+)
 
 app.synth()

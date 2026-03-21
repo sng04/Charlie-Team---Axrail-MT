@@ -1,6 +1,6 @@
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError
@@ -63,7 +63,7 @@ def lambda_handler(event, context):
                 "email": ADMIN_EMAIL,
                 "role": "admin",
                 "created_by": "system",
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
         )
         print("Saved to DynamoDB")

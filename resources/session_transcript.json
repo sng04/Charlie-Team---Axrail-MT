@@ -1,0 +1,45 @@
+{
+  "jobName": "GoogleMeet_Client_Sync_001",
+  "accountId": "123456789012",
+  "status": "COMPLETED",
+  "results": {
+    "transcripts": [
+      {
+        "transcript": "Hi everyone, thanks for joining. Today we wanted to discuss the cloud migration strategy. That sounds good Sarah, but I have a quick question. How are you handling data encryption at rest in the proposed architecture? Oh, um, that is a great question John. Let me just check my notes here..."
+      }
+    ],
+    "speaker_labels": {
+      "segments": [
+        {
+          "start_time": "0.0",
+          "end_time": "4.5",
+          "speaker_label": "spk_0",
+          "items": [
+            {"start_time": "0.0", "end_time": "4.5", "speaker_label": "spk_0"}
+          ]
+        },
+        {
+          "start_time": "5.0",
+          "end_time": "12.2",
+          "speaker_label": "spk_1",
+          "items": [
+            {"start_time": "5.0", "end_time": "12.2", "speaker_label": "spk_1"}
+          ]
+        },
+        {
+          "start_time": "13.0",
+          "end_time": "18.5",
+          "speaker_label": "spk_0",
+          "items": [
+            {"start_time": "13.0", "end_time": "18.5", "speaker_label": "spk_0"}
+          ]
+        }
+      ]
+    },
+    "items": [
+      {"start_time": "0.0", "end_time": "4.5", "alternatives": [{"confidence": "0.99", "content": "Hi everyone, thanks for joining. Today we wanted to discuss the cloud migration strategy."}], "type": "pronunciation"},
+      {"start_time": "5.0", "end_time": "12.2", "alternatives": [{"confidence": "0.98", "content": "That sounds good Sarah, but I have a quick question. How are you handling data encryption at rest in the proposed architecture?"}], "type": "pronunciation"},
+      {"start_time": "13.0", "end_time": "18.5", "alternatives": [{"confidence": "0.95", "content": "Oh, um, that is a great question John. Let me just check my notes here..."}], "type": "pronunciation"}
+    ]
+  }
+}

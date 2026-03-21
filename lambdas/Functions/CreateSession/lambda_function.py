@@ -72,7 +72,7 @@ def _parse_body(event: dict) -> dict:
 
 
 def _validate_input(data: dict) -> None:
-    required_fields = ["project_id", "name", "meeting_link"]
+    required_fields = ["project_id", "name"]
     missing = [f for f in required_fields if f not in data or data[f] is None]
     if missing:
         raise BadRequestError(f"Missing required fields: {', '.join(missing)}")
@@ -238,18 +238,20 @@ def lambda_handler(event, context):
             raise UnauthorizedError("You don't have access to this project")
 
         project = _verify_project_exists(data["project_id"])
-        credential = _get_bot_credential(project)
 
         session_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
+
+        meeting_link = data.get("meeting_link")
 
         item = {
             "session_id": session_id,
             "project_id": data["project_id"],
             "name": data["name"],
             "description": data.get("description", ""),
-            "meeting_link": data["meeting_link"],
-            "bot_status": "pending",
+            "meeting_link": meeting_link or "",
+            "bot_status": "pending" if meeting_link else "none",
+            "is_active": "inactive",
             "task_arn": None,
             "start_time": data.get("start_time"),
             "end_time": data.get("end_time"),
@@ -257,33 +259,36 @@ def lambda_handler(event, context):
             "updated_at": now,
         }
 
-        use_warm_pool = WARM_POOL_ENABLED and _check_warm_pool_available(credential["credential_id"])
+        # Only dispatch bot if meeting_link is provided
+        if meeting_link:
+            credential = _get_bot_credential(project)
+            use_warm_pool = WARM_POOL_ENABLED and _check_warm_pool_available(credential["credential_id"])
 
-        if use_warm_pool:
-            sent = _send_to_warm_pool(
-                session_id,
-                data["project_id"],
-                credential["credential_id"],
-                data["meeting_link"],
-            )
-            if sent:
-                item["bot_status"] = "queued"
-                item["dispatch_mode"] = "warm_pool"
-                logger.info(f"Session {session_id} queued for warm pool")
-            else:
-                use_warm_pool = False
+            if use_warm_pool:
+                sent = _send_to_warm_pool(
+                    session_id,
+                    data["project_id"],
+                    credential["credential_id"],
+                    meeting_link,
+                )
+                if sent:
+                    item["bot_status"] = "queued"
+                    item["dispatch_mode"] = "warm_pool"
+                    logger.info(f"Session {session_id} queued for warm pool")
+                else:
+                    use_warm_pool = False
 
-        if not use_warm_pool:
-            task_arn = _start_meeting_bot(
-                session_id,
-                data["project_id"],
-                credential["credential_id"],
-                data["meeting_link"],
-            )
-            if task_arn:
-                item["task_arn"] = task_arn
-                item["bot_status"] = "starting"
-                item["dispatch_mode"] = "cold_start"
+            if not use_warm_pool:
+                task_arn = _start_meeting_bot(
+                    session_id,
+                    data["project_id"],
+                    credential["credential_id"],
+                    meeting_link,
+                )
+                if task_arn:
+                    item["task_arn"] = task_arn
+                    item["bot_status"] = "starting"
+                    item["dispatch_mode"] = "cold_start"
 
         sessions_table.put_item(Item=item)
 
