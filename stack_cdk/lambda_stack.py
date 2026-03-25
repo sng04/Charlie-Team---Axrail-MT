@@ -178,6 +178,8 @@ class LambdaStack(Stack):
                     "cognito-idp:AdminAddUserToGroup",
                     "cognito-idp:AdminListGroupsForUser",
                     "cognito-idp:GlobalSignOut",
+                    "cognito-idp:AdminDeleteUser",
+                    "cognito-idp:AdminUpdateUserAttributes",
                 ],
                 resources=[self.cognito_stack.user_pool.user_pool_arn],
             )
@@ -353,6 +355,23 @@ class LambdaStack(Stack):
 
         self.logout_fn = self._create_lambda_function(
             "Logout", "lambdas/Functions/Logout"
+        )
+
+        # User CRUD (admin only)
+        self.list_users_fn = self._create_lambda_function(
+            "ListUsers", "lambdas/Functions/ListUsers"
+        )
+
+        self.get_user_fn = self._create_lambda_function(
+            "GetUser", "lambdas/Functions/GetUser"
+        )
+
+        self.update_user_fn = self._create_lambda_function(
+            "UpdateUser", "lambdas/Functions/UpdateUser"
+        )
+
+        self.delete_user_fn = self._create_lambda_function(
+            "DeleteUser", "lambdas/Functions/DeleteUser"
         )
 
         # Project CRUD
@@ -941,6 +960,34 @@ class LambdaStack(Stack):
             "LogoutFnArn",
             value=self.logout_fn.function_arn,
             export_name=f"AXRAIL-LogoutFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "ListUsersFnArn",
+            value=self.list_users_fn.function_arn,
+            export_name=f"AXRAIL-ListUsersFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "GetUserFnArn",
+            value=self.get_user_fn.function_arn,
+            export_name=f"AXRAIL-GetUserFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "UpdateUserFnArn",
+            value=self.update_user_fn.function_arn,
+            export_name=f"AXRAIL-UpdateUserFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "DeleteUserFnArn",
+            value=self.delete_user_fn.function_arn,
+            export_name=f"AXRAIL-DeleteUserFnArn-{self.env_name}",
         )
 
         CfnOutput(
