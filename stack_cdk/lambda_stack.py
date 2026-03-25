@@ -484,6 +484,10 @@ class LambdaStack(Stack):
             "StopWarmPool", "lambdas/Functions/StopWarmPool", timeout=120
         )
 
+        self.list_bot_pool_fn = self._create_lambda_function(
+            "ListBotPool", "lambdas/Functions/ListBotPool"
+        )
+
     def _create_d2_lambda_functions(self) -> None:
         """Create D2's 10 Lambda functions with appropriate layer/env combos."""
         # CRUD Lambdas (shared + powertools layers, base env)

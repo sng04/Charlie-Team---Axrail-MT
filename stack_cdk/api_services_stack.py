@@ -481,6 +481,15 @@ class ApiServicesStack(Stack):
             apigw.LambdaIntegration(self.lambda_stack.verify_bot_credential_fn),
         )
 
+        # GET /bot-credentials/{credentialId}/pool - List bot pool containers (admin only)
+        pool_resource = bot_credential_resource.add_resource("pool")
+        pool_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.list_bot_pool_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
     def _create_warm_pool_routes(self) -> None:
         """Create Warm Pool management API routes."""
         warm_pool_resource = self.api.root.add_resource("warm-pool")
