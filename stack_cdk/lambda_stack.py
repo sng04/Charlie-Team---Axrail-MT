@@ -30,7 +30,6 @@ class LambdaStack(Stack):
         dynamodb_stack: DynamoDBStack,
         cognito_stack: CognitoStack,
         meeting_bot_stack: MeetingBotStack,
-        ses_sender_email: str,
         admin_email: str,
         admin_temp_password: str,
         env_config: dict = None,
@@ -43,7 +42,6 @@ class LambdaStack(Stack):
         self.dynamodb_stack = dynamodb_stack
         self.cognito_stack = cognito_stack
         self.meeting_bot_stack = meeting_bot_stack
-        self.ses_sender_email = ses_sender_email
         self.admin_email = admin_email
         self.admin_temp_password = admin_temp_password
 
@@ -51,11 +49,11 @@ class LambdaStack(Stack):
         self._create_lambda_role()
         self._grant_dynamodb_permissions()
         self._grant_cognito_permissions()
-        self._grant_ses_permissions()
         self._grant_ecs_permissions()
         self._grant_sqs_permissions()
         self._grant_secrets_permissions()
         self._grant_cloudformation_permissions()
+        self._grant_eventbridge_permissions()
         self._create_lambda_functions()
         self._create_d2_lambda_functions()
         self._grant_opensearch_permissions()
@@ -66,6 +64,7 @@ class LambdaStack(Stack):
         self._create_websocket_api()
         self._create_ecs_task_state_handler()
         self._create_gap_scheduler_rule()
+        self._create_bot_credential_validation_worker()
         self._create_seed_admin()
         self._create_seed_agent_data()
         self._create_exports()
@@ -185,19 +184,6 @@ class LambdaStack(Stack):
             )
         )
 
-    def _grant_ses_permissions(self) -> None:
-        """Grant SES permissions for sending verification emails."""
-        self.lambda_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=[
-                    "ses:SendEmail",
-                    "ses:SendRawEmail",
-                ],
-                resources=[f"arn:aws:ses:{self.region}:{self.account}:identity/*"],
-            )
-        )
-
     def _grant_ecs_permissions(self) -> None:
         """Grant ECS permissions for starting/stopping meeting bot tasks."""
         self.lambda_role.add_to_policy(
@@ -281,6 +267,16 @@ class LambdaStack(Stack):
             )
         )
 
+    def _grant_eventbridge_permissions(self) -> None:
+        """Grant EventBridge permissions to publish events."""
+        self.lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["events:PutEvents"],
+                resources=[f"arn:aws:events:{self.region}:{self.account}:event-bus/default"],
+            )
+        )
+
     def _get_lambda_environment(self) -> dict:
         return {
             "USER_POOL_ID": self.cognito_stack.user_pool.user_pool_id,
@@ -302,7 +298,6 @@ class LambdaStack(Stack):
             "ENVIRONMENT": self.env_name,
             "POWERTOOLS_SERVICE_NAME": "axrail-api",
             "LOG_LEVEL": "INFO",
-            "SES_SENDER_EMAIL": self.ses_sender_email,
             # D2 table names
             "AGENTS_TABLE_NAME": self.dynamodb_stack.agents_table.table_name,
             "PERSONALITIES_TABLE_NAME": self.dynamodb_stack.personalities_table.table_name,
@@ -829,6 +824,47 @@ class LambdaStack(Stack):
         )
         self.gap_scheduler_rule.add_target(
             targets.LambdaFunction(self.gap_scheduler_fn)
+        )
+
+    def _create_bot_credential_validation_worker(self) -> None:
+        """Create Lambda and EventBridge rule for async bot credential SMTP validation."""
+        self.validate_bot_credential_worker_fn = _lambda.Function(
+            self,
+            "ValidateBotCredentialWorker",
+            function_name=f"AXRAIL-ValidateBotCredentialWorker-{self.env_name}",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("lambdas/Functions/ValidateBotCredentialWorker"),
+            role=self.lambda_role,
+            layers=[
+                self.shared_layer,
+                self.powertools_layer,
+            ],
+            environment={
+                "BOT_CREDENTIALS_TABLE": self.dynamodb_stack.bot_credentials_table.table_name,
+                "ENVIRONMENT": self.env_name,
+                "POWERTOOLS_SERVICE_NAME": "axrail-bot-credential-validator",
+                "LOG_LEVEL": "INFO",
+            },
+            timeout=Duration.seconds(60),
+            memory_size=256,
+            tracing=_lambda.Tracing.ACTIVE,
+        )
+
+        # EventBridge rule to trigger validation worker
+        self.bot_credential_validation_rule = events.Rule(
+            self,
+            "BotCredentialValidationRule",
+            rule_name=f"AXRAIL-BotCredentialValidationRule-{self.env_name}",
+            description="Trigger async SMTP validation for bot credentials",
+            event_pattern=events.EventPattern(
+                source=["axrail.bot-credentials"],
+                detail_type=["BotCredentialValidation"],
+            ),
+        )
+
+        self.bot_credential_validation_rule.add_target(
+            targets.LambdaFunction(self.validate_bot_credential_worker_fn)
         )
 
     def _create_seed_admin(self) -> None:

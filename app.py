@@ -57,7 +57,6 @@ lambda_stack = LambdaStack(
     dynamodb_stack=dynamodb_stack,
     cognito_stack=cognito_stack,
     meeting_bot_stack=meeting_bot_stack,
-    ses_sender_email=env_config["ses_sender_email"],
     admin_email=env_config["admin_email"],
     admin_temp_password=env_config["admin_temp_password"],
     env_config=env_config,

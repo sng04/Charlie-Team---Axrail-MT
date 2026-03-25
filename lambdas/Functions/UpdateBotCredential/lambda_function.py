@@ -3,12 +3,11 @@ UpdateBotCredential Lambda Function
 
 Updates an existing bot credential. Admin only (enforced by Lambda Authorizer).
 Supports updating email, password, and available_status.
-If email is changed, resets verification_status to not_verified and sends new verification email.
+If email or password is changed, triggers async SMTP re-validation.
 """
 
 import json
 import os
-import uuid
 from datetime import datetime, timezone
 
 from aws_lambda_powertools import Logger, Tracer
@@ -23,14 +22,13 @@ tracer = Tracer()
 
 dynamodb = boto3.resource("dynamodb")
 secrets_client = boto3.client("secretsmanager")
-ses_client = boto3.client("ses")
+events_client = boto3.client("events")
 
 table_name = os.environ.get("BOT_CREDENTIALS_TABLE")
 table = dynamodb.Table(table_name)
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
-API_ENDPOINT = os.environ.get("API_ENDPOINT", "")
-SES_SENDER_EMAIL = os.environ.get("SES_SENDER_EMAIL", "noreply@axrail.com")
+EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "default")
 
 
 def _parse_body(event: dict) -> dict:
@@ -92,57 +90,23 @@ def _update_password(credential_id: str, password: str) -> None:
         logger.info(f"Created secret: {secret_name}")
 
 
-def _send_verification_email(email: str, credential_id: str, token: str) -> None:
-    """Send verification email via SES."""
-    if not API_ENDPOINT:
-        logger.warning("API_ENDPOINT not configured, skipping verification email")
-        return
-
-    verification_link = f"{API_ENDPOINT}/bot-credentials/{credential_id}/verify?token={token}"
-
-    subject = "Verify your Bot Credential Email - AXRAIL Meeting Assistant"
-    body_html = f"""
-    <html>
-    <body>
-        <h2>Email Verification Required</h2>
-        <p>Your bot credential email has been updated. Please verify the new email:</p>
-        <p><a href="{verification_link}">Verify Email</a></p>
-        <p>Or copy and paste this URL into your browser:</p>
-        <p>{verification_link}</p>
-        <p>This link will expire in 24 hours.</p>
-        <br>
-        <p>Best regards,<br>AXRAIL Meeting Assistant Team</p>
-    </body>
-    </html>
-    """
-    body_text = f"""
-    Email Verification Required
-
-    Your bot credential email has been updated. Please verify the new email:
-    {verification_link}
-
-    This link will expire in 24 hours.
-
-    Best regards,
-    AXRAIL Meeting Assistant Team
-    """
-
-    try:
-        ses_client.send_email(
-            Source=SES_SENDER_EMAIL,
-            Destination={"ToAddresses": [email]},
-            Message={
-                "Subject": {"Data": subject, "Charset": "UTF-8"},
-                "Body": {
-                    "Text": {"Data": body_text, "Charset": "UTF-8"},
-                    "Html": {"Data": body_html, "Charset": "UTF-8"},
-                },
-            },
-        )
-        logger.info(f"Verification email sent to: {email}")
-    except ClientError as e:
-        logger.error(f"Failed to send verification email: {e}")
-        raise
+def _publish_validation_event(credential_id: str, email: str, is_update: bool = False) -> None:
+    """Publish event to EventBridge for async SMTP validation."""
+    events_client.put_events(
+        Entries=[
+            {
+                "Source": "axrail.bot-credentials",
+                "DetailType": "BotCredentialValidation",
+                "Detail": json.dumps({
+                    "credential_id": credential_id,
+                    "email": email,
+                    "is_update": is_update,
+                }),
+                "EventBusName": EVENT_BUS_NAME,
+            }
+        ]
+    )
+    logger.info(f"Published validation event for credential {credential_id}")
 
 
 @tracer.capture_lambda_handler
@@ -158,21 +122,24 @@ def lambda_handler(event, context):
 
         allowed_fields = ["email", "password", "available_status", "warm_pool_size"]
         update_data = {}
-        email_changed = False
-        verification_token = None
+        needs_revalidation = False
+        new_email = existing.get("email")
 
         for key in allowed_fields:
             if key in data:
                 if key == "email" and data[key] != existing.get("email"):
                     _check_email_exists(data[key], credential_id)
                     update_data["email"] = data[key]
-                    update_data["verification_status"] = "not_verified"
-                    verification_token = str(uuid.uuid4())
-                    update_data["verification_token"] = verification_token
-                    email_changed = True
+                    update_data["verification_status"] = "validating"
+                    new_email = data[key]
+                    needs_revalidation = True
                 elif key == "password":
                     normalized_password = _normalize_password(data[key])
                     _update_password(credential_id, normalized_password)
+                    # Re-validate if password changed
+                    if not needs_revalidation:
+                        update_data["verification_status"] = "validating"
+                        needs_revalidation = True
                 elif key == "available_status":
                     if data[key] not in ["active", "inactive"]:
                         raise BadRequestError("available_status must be 'active' or 'inactive'")
@@ -187,18 +154,31 @@ def lambda_handler(event, context):
 
         if update_data:
             update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            
+            # Remove verification_error if re-validating
+            if needs_revalidation:
+                update_data["verification_error"] = None
 
             parts, names, values = [], {}, {}
+            remove_parts = []
             for key, val in update_data.items():
-                parts.append(f"#{key} = :{key}")
-                names[f"#{key}"] = key
-                values[f":{key}"] = val
+                if val is None:
+                    remove_parts.append(f"#{key}")
+                    names[f"#{key}"] = key
+                else:
+                    parts.append(f"#{key} = :{key}")
+                    names[f"#{key}"] = key
+                    values[f":{key}"] = val
+
+            update_expr = "SET " + ", ".join(parts)
+            if remove_parts:
+                update_expr += " REMOVE " + ", ".join(remove_parts)
 
             response = table.update_item(
                 Key={"credential_id": credential_id},
-                UpdateExpression="SET " + ", ".join(parts),
+                UpdateExpression=update_expr,
                 ExpressionAttributeNames=names,
-                ExpressionAttributeValues=values,
+                ExpressionAttributeValues=values if values else None,
                 ReturnValues="ALL_NEW",
             )
 
@@ -212,14 +192,17 @@ def lambda_handler(event, context):
                 ExpressionAttributeValues={":updated_at": result["updated_at"]},
             )
 
-        if email_changed and verification_token:
-            _send_verification_email(data["email"], credential_id, verification_token)
+        # Trigger async SMTP validation if email or password changed
+        if needs_revalidation:
+            _publish_validation_event(credential_id, new_email, is_update=True)
 
+        # Remove internal fields from response
         result.pop("verification_token", None)
+        result.pop("verification_error", None)
 
         message = "Bot credential updated successfully"
-        if email_changed:
-            message += ". Verification email sent to new address."
+        if needs_revalidation:
+            message += ". Re-validating email credentials..."
 
         return createResponse(200, message, result)
     except BadRequestError as e:

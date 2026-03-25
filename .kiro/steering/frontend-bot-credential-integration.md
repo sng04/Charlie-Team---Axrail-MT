@@ -29,28 +29,38 @@ Example: `https://abc123.execute-api.ap-southeast-1.amazonaws.com/dev`
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Create    │────▶│   Email     │────▶│   Verify    │────▶│   Active    │
-│  Credential │     │   Sent      │     │   Email     │     │   Ready     │
+│   Create    │────▶│  Validating │────▶│  Verified   │────▶│   Active    │
+│  Credential │     │   (SMTP)    │     │   Ready     │     │   Ready     │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-       │                                                           │
+       │                   │                                       │
+       │                   │ (invalid)                             ▼
+       │                   ▼                                ┌─────────────┐
+       │            ┌─────────────┐                         │  Assign to  │
+       │            │  Deleted    │                         │   Project   │
+       │            │ (auto-cleanup)                        └─────────────┘
+       │            └─────────────┘                                │
        │                                                           ▼
        │                                                    ┌─────────────┐
-       │                                                    │  Assign to  │
-       │                                                    │   Project   │
+       │                                                    │  Start Warm │
+       │                                                    │    Pool     │
        │                                                    └─────────────┘
-       │                                                           │
-       ▼                                                           ▼
-┌─────────────┐                                             ┌─────────────┐
-│  not_verified │                                           │  Start Warm │
-│  (inactive)   │                                           │    Pool     │
-└─────────────┘                                             └─────────────┘
 ```
+
+### Verification Flow (Async SMTP Validation)
+
+1. Admin creates credential via `POST /bot-credentials`
+2. Backend saves credential with `verification_status: "validating"`
+3. EventBridge triggers async SMTP validation worker
+4. Worker attempts SMTP login with email/password
+5. If valid: status updated to `"verified"`
+6. If invalid: credential and secret are deleted automatically
+7. Frontend polls `GET /bot-credentials/{id}/verify` to check status
 
 ### Status Fields
 
 | Field | Values | Description |
 |-------|--------|-------------|
-| `verification_status` | `not_verified`, `verified` | Email verification state |
+| `verification_status` | `validating`, `verified`, `invalid` | SMTP validation state |
 | `available_status` | `inactive`, `active` | Whether credential can be used |
 
 ---
@@ -62,7 +72,7 @@ Example: `https://abc123.execute-api.ap-southeast-1.amazonaws.com/dev`
 #### 1. Create Bot Credential
 **POST** `/bot-credentials`
 
-Creates a new bot credential and sends verification email.
+Creates a new bot credential and triggers async SMTP validation.
 
 **Headers:**
 ```
@@ -84,16 +94,23 @@ Authorization: Bearer {admin_access_token}
 | `password` | string | Yes | Bot account password (hyphens auto-removed) |
 | `warm_pool_size` | integer | No | Number of warm containers (default: 1) |
 
+**Supported Email Providers:**
+- Gmail (`@gmail.com`, `@googlemail.com`) - requires App Password if 2FA enabled
+- Outlook (`@outlook.com`, `@hotmail.com`, `@live.com`) - requires App Password if 2FA enabled
+- Yahoo (`@yahoo.com`)
+- iCloud (`@icloud.com`, `@me.com`)
+- Zoho (`@zoho.com`)
+
 **Success Response (200):**
 ```json
 {
   "statusCode": 200,
   "status": true,
-  "message": "Bot credential created successfully. Verification email sent.",
+  "message": "Bot credential created. Validating email credentials...",
   "data": {
     "credential_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "email": "bot@example.com",
-    "verification_status": "not_verified",
+    "verification_status": "validating",
     "available_status": "inactive",
     "warm_pool_size": 2,
     "created_at": "2024-01-15T10:30:00.000000+00:00",
@@ -277,22 +294,36 @@ Authorization: Bearer {admin_access_token}
 
 ---
 
-#### 6. Verify Bot Credential Email
-**GET** `/bot-credentials/{credentialId}/verify?token={token}`
+#### 6. Check Verification Status
+**GET** `/bot-credentials/{credentialId}/verify`
 
-Public endpoint (no auth) - accessed via email link.
+Returns current verification status. Frontend should poll this endpoint after creating a credential.
 
-**Query Parameters:**
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `token` | string | Yes | Verification token from email |
+**Headers:**
+```
+Authorization: Bearer {admin_access_token}
+```
 
-**Success Response (200):**
+**Success Response (200) - Validating:**
 ```json
 {
   "statusCode": 200,
   "status": true,
-  "message": "Email verified successfully",
+  "message": "Validation in progress...",
+  "data": {
+    "credential_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "email": "bot@example.com",
+    "verification_status": "validating"
+  }
+}
+```
+
+**Success Response (200) - Verified:**
+```json
+{
+  "statusCode": 200,
+  "status": true,
+  "message": "Email credentials verified successfully",
   "data": {
     "credential_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "email": "bot@example.com",
@@ -302,9 +333,12 @@ Public endpoint (no auth) - accessed via email link.
 ```
 
 **Error Responses:**
-- `400`: Verification token is required / Invalid or expired token
-- `404`: Bot credential not found
+- `400`: Credential ID is required
+- `401`: Unauthorized (not admin)
+- `404`: Bot credential not found (may have been deleted due to invalid credentials)
 - `500`: Internal server error
+
+**Note:** If credential is not found (404), it means SMTP validation failed and the credential was automatically deleted.
 
 ---
 
@@ -571,10 +605,49 @@ async function createCredential(data) {
   });
   
   if (response.status) {
-    showSuccess('Credential created. Verification email sent.');
-    refreshList();
-    closeModal();
+    showInfo('Credential created. Validating email credentials...');
+    // Start polling for verification status
+    pollVerificationStatus(response.data.credential_id);
   }
+}
+
+// Poll verification status every 2 seconds
+async function pollVerificationStatus(credentialId, maxAttempts = 30) {
+  let attempts = 0;
+  
+  const poll = async () => {
+    attempts++;
+    try {
+      const response = await apiCall('GET', `/bot-credentials/${credentialId}/verify`);
+      
+      if (response.data.verification_status === 'verified') {
+        showSuccess('Email credentials verified successfully!');
+        refreshList();
+        closeModal();
+        return;
+      }
+      
+      if (response.data.verification_status === 'validating' && attempts < maxAttempts) {
+        setTimeout(poll, 2000);
+        return;
+      }
+      
+      // Timeout after max attempts
+      showWarning('Verification is taking longer than expected. Please check back later.');
+      refreshList();
+      closeModal();
+    } catch (error) {
+      if (error.status === 404) {
+        // Credential was deleted due to invalid credentials
+        showError('Invalid email credentials. Please check your email and password (use App Password for Gmail/Outlook with 2FA).');
+        closeModal();
+        return;
+      }
+      throw error;
+    }
+  };
+  
+  poll();
 }
 ```
 
@@ -806,9 +879,14 @@ async function apiCall(method, url, body = null) {
   color: #065F46;
 }
 
-.badge-not-verified {
-  background: #FEF3C7;
-  color: #92400E;
+.badge-validating {
+  background: #DBEAFE;
+  color: #1E40AF;
+}
+
+.badge-invalid {
+  background: #FEE2E2;
+  color: #991B1B;
 }
 
 /* Container Status */
@@ -838,12 +916,12 @@ async function apiCall(method, url, body = null) {
 ## Summary
 
 ### Available Endpoints:
-1. ✅ `POST /bot-credentials` - Create bot credential
+1. ✅ `POST /bot-credentials` - Create bot credential (triggers async SMTP validation)
 2. ✅ `GET /bot-credentials` - List all bot credentials
 3. ✅ `GET /bot-credentials/{credentialId}` - Get single credential
 4. ✅ `PUT /bot-credentials/{credentialId}` - Update credential
 5. ✅ `DELETE /bot-credentials/{credentialId}` - Delete credential
-6. ✅ `GET /bot-credentials/{credentialId}/verify` - Verify email (public)
+6. ✅ `GET /bot-credentials/{credentialId}/verify` - Check verification status (poll this)
 7. ✅ `GET /bot-credentials/{credentialId}/pool` - List pool containers
 8. ✅ `POST /warm-pool/start` - Start warm pool
 9. ✅ `POST /warm-pool/stop` - Stop warm pool
