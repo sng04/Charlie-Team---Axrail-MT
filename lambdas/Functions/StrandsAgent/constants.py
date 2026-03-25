@@ -92,7 +92,7 @@ TASK_PROMPTS = {
         "3. Generate a markdown summary with these sections:\n"
         "   - Meeting Title (derived from main discussion topics)\n"
         "   - Date (ISO 8601 format)\n"
-        "   - Attendees (from speaker labels in transcript)\n"
+        "   - Participants (identify from conversational context and names mentioned)\n"
         "   - Key Discussion Topics\n"
         "   - Decisions Made\n"
         "   - Action Items (with owners where identifiable)\n"
@@ -115,7 +115,9 @@ TASK_PROMPTS = {
         "   f) Coaching Insights — specific, actionable improvement suggestions referencing transcript moments\n"
         "   g) Overall Meeting Effectiveness — rating 1-10 with justification\n"
         "Be specific and reference actual moments from the transcript. "
-        "Avoid generic platitudes — every suggestion should be grounded in evidence from the meeting data."
+        "Avoid generic platitudes — every suggestion should be grounded in evidence from the meeting data. "
+        "Note: The transcript is single-channel and does not have speaker role labels. "
+        "Analyze communication patterns from the conversational content itself."
     ),
     "suggestResponse": (
         "A client just asked a question during a live meeting. "

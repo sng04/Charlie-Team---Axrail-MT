@@ -2,67 +2,61 @@
 
 ## Overview
 
-The `processTranscript` WebSocket action handles real-time meeting transcript lines. It classifies speakers, stores transcript entries, matches questions against pre-set topics, detects client questions, and captures answers automatically.
-
-## Speaker Classification
-
-When transcript lines arrive, speakers need to be classified as `"user"` (the meeting host/presenter) or `"client"` (the external participant).
-
-Two methods are available:
-
-1. **Speaker hints** (recommended) — The client sends a `speaker_hint` map with each `processTranscript` call. This is instant and deterministic.
-
-2. **Model classification** — If no hints are provided and no role map exists, Nova Pro analyzes the transcript context to infer roles. Returns a confidence level (`"high"` or `"low"`).
-
-Speaker hints should be sent on every `processTranscript` call. Role maps are cached in Lambda memory but are lost on cold starts or when requests hit different Lambda instances.
+The `processTranscript` WebSocket action handles real-time meeting transcript lines. It processes all incoming lines without speaker classification, stores transcript entries, matches questions against pre-set topics, detects questions, and captures answers automatically.
 
 ## Three-Stage QA Pipeline
 
 ```mermaid
 flowchart LR
-    A[Transcript Line] --> B{Speaker Role?}
-    B -->|user| C[Stage 1: Question Matching]
-    B -->|client| D[Stage 3: Question Detection]
+    A[Transcript Line] --> B{Non-partial?}
+    B -->|Yes| C[Stage 1: Question Matching]
+    B -->|No| D[Skip]
     C --> E{Similarity >= 0.80?}
     E -->|Yes| F[Open Answer Window]
-    E -->|No| G[No action]
-    D --> H{Is Question?}
-    H -->|Yes| I[Suggested Response + User Response Window]
-    H -->|No| J[No action]
+    E -->|No| G[Stage 3: Question Detection]
+    G --> H{Is Question?}
+    H -->|Yes| I[Suggested Response + Response Window]
+    H -->|No| J[Window Management]
+    F --> J
+    I --> J
 ```
 
 ### Stage 1: Suggested Question Matching
 
-Before the meeting, call `setSuggestedQuestions` to store questions with embeddings. During the transcript, each user-spoken line is embedded and compared against unmatched questions using cosine similarity.
+Before the meeting, call `setSuggestedQuestions` to store questions with embeddings. During the transcript, each non-partial line is embedded and compared against unmatched questions using cosine similarity.
 
 Threshold: **0.80** (configurable in `constants.py` as `MATCH_THRESHOLD`)
 
 ### Stage 2: Answer Window Capture
 
-When a question is matched, an answer window opens to capture the client's response. Close conditions:
-- 5 client lines collected
-- Speaker turn change (user speaks while client lines exist)
+When a question is matched, an answer window opens to capture subsequent lines as the answer. Close conditions:
+- 5 lines collected
+- New question detected in an incoming line
 - 60-second timeout
 
 Captured QA pairs are saved with `source: "participant"`.
 
-### Stage 3: Client Question Detection
+### Stage 3: Question Detection
 
-Client lines are checked for questions using a two-tier approach:
+All non-partial lines are checked for questions using a two-tier approach:
 
 1. **Heuristic check** — Ends with `?` or starts with an interrogative word (`what`, `how`, `why`, `when`, `where`, `who`, `which`, `can you`, `could you`, etc.)
 2. **Model check** — If heuristics are inconclusive, Nova Pro classifies the text
 
 Filter: Lines shorter than 5 words are skipped to avoid false positives.
 
-When a client question is detected:
-- A `clientQuestionDetected` message is sent
+When a question is detected:
+- A `questionDetected` message is sent
 - A suggested response is generated from the knowledge base
-- A user response window opens to capture the host's verbal answer (saved with `source: "client"`)
+- A response window opens to capture the verbal answer that follows (saved with `source: "participant"`)
+
+The response window follows the same close conditions as the answer window (5 lines / new question detected / 60s timeout).
 
 ## Transcript Storage
 
-All classified transcript lines are batch-written to the TranscriptsTable with fields: `transcript_id`, `session_id`, `speaker`, `speaker_role`, `text`, `timestamp`.
+All transcript lines are batch-written to the TranscriptsTable with fields: `transcript_id`, `session_id`, `speaker`, `text`, `timestamp`, `start_time`, `end_time`, `confidence`, `is_partial`.
+
+> **Note:** The `speaker_role` field is no longer assigned by the processing pipeline. Existing records may still contain `speaker_role` from prior multi-channel processing, but new entries will not include it.
 
 A rolling buffer of the last 50 lines is maintained in memory for context.
 

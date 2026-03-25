@@ -53,8 +53,8 @@ def _is_question_model(text: str) -> bool:
         return False
 
 
-def _detect_client_question(text: str) -> tuple:
-    """Detect if client text is a question.
+def _detect_question(text: str) -> tuple:
+    """Detect if text is a question.
 
     Returns (is_question, detection_method).
     """

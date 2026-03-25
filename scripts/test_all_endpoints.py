@@ -544,23 +544,26 @@ def test_ws_core_actions(session_id: str, agent_id: str):
 
 
 # ===========================================================================
-# 11. WebSocket — processTranscript (speaker hints)
+# 11. WebSocket — processTranscript (basic)
 # ===========================================================================
 
-def test_ws_process_transcript_hints(session_id: str, agent_id: str):
-    print("\n── processTranscript (speaker hints) ──")
+def test_ws_process_transcript_basic(session_id: str, agent_id: str):
+    print("\n── processTranscript (basic) ──")
 
     try:
         ws = ws_connect(session_id, agent_id)
-        record("Connect for processTranscript hints", True)
+        record("Connect for processTranscript basic", True)
     except Exception as e:
-        record("Connect for processTranscript hints", False, str(e))
+        record("Connect for processTranscript basic", False, str(e))
         return
 
     lines = [
-        {"speaker": "Alice", "text": "Welcome everyone, let's get started with the demo."},
-        {"speaker": "Bob", "text": "Thanks Alice, excited to see what you've built."},
-        {"speaker": "Alice", "text": "We have a new feature for real-time question detection."},
+        {"speaker": "spk_0", "text": "Welcome everyone, let's get started with the demo.",
+         "start_time": "0.00", "end_time": "3.50", "confidence": "0.95", "is_partial": False},
+        {"speaker": "spk_0", "text": "Thanks Alice, excited to see what you've built.",
+         "start_time": "3.80", "end_time": "6.20", "confidence": "0.93", "is_partial": False},
+        {"speaker": "spk_0", "text": "We have a new feature for real-time question detection.",
+         "start_time": "6.50", "end_time": "9.80", "confidence": "0.97", "is_partial": False},
     ]
 
     try:
@@ -568,44 +571,42 @@ def test_ws_process_transcript_hints(session_id: str, agent_id: str):
             "action": "processTranscript",
             "session_id": session_id,
             "lines": lines,
-            "speaker_hint": {"Alice": "user", "Bob": "client"},
         }))
         messages = ws_recv_all(ws, timeout_per_msg=15.0)
         tp = find_msg(messages, "transcriptProcessed")
         ok = tp is not None and tp.get("lines_processed") == 3
-        role_map = tp.get("speaker_role_map", {}) if tp else {}
-        record("processTranscript with hints", ok,
-               f"lines={tp.get('lines_processed') if tp else 0}, roles={role_map}")
-
-        hints_ok = role_map.get("Alice") == "user" and role_map.get("Bob") == "client"
-        record("Speaker hints applied correctly", hints_ok, f"map={role_map}")
+        record("processTranscript basic", ok,
+               f"lines={tp.get('lines_processed') if tp else 0}")
     except Exception as e:
-        record("processTranscript with hints", False, str(e))
+        record("processTranscript basic", False, str(e))
 
     ws.close()
 
 
 # ===========================================================================
-# 12. WebSocket — processTranscript (model classification)
+# 12. WebSocket — processTranscript (no hints)
 # ===========================================================================
 
-def test_ws_process_transcript_model(session_id: str, agent_id: str):
-    print("\n── processTranscript (model classification) ──")
+def test_ws_process_transcript_no_hints(session_id: str, agent_id: str):
+    print("\n── processTranscript (no hints) ──")
 
     try:
         ws = ws_connect(session_id, agent_id)
-        record("Connect for model classification", True)
+        record("Connect for processTranscript no hints", True)
     except Exception as e:
-        record("Connect for model classification", False, str(e))
+        record("Connect for processTranscript no hints", False, str(e))
         return
 
     lines = [
-        {"speaker": "Speaker A",
-         "text": "Hi, I'm the sales rep. Let me walk you through our product features today."},
-        {"speaker": "Speaker B",
-         "text": "Great, I'm interested in learning about your pricing and integration options."},
-        {"speaker": "Speaker A",
-         "text": "Our platform starts at fifty dollars per month for the basic tier."},
+        {"speaker": "spk_0",
+         "text": "Hi, I'm the sales rep. Let me walk you through our product features today.",
+         "start_time": "0.00", "end_time": "4.50", "confidence": "0.92", "is_partial": False},
+        {"speaker": "spk_0",
+         "text": "Great, I'm interested in learning about your pricing and integration options.",
+         "start_time": "5.00", "end_time": "8.30", "confidence": "0.94", "is_partial": False},
+        {"speaker": "spk_0",
+         "text": "Our platform starts at fifty dollars per month for the basic tier.",
+         "start_time": "8.80", "end_time": "12.10", "confidence": "0.96", "is_partial": False},
     ]
 
     try:
@@ -617,14 +618,10 @@ def test_ws_process_transcript_model(session_id: str, agent_id: str):
         messages = ws_recv_all(ws, timeout_per_msg=30.0)
         tp = find_msg(messages, "transcriptProcessed")
         ok = tp is not None and tp.get("lines_processed") == 3
-        role_map = tp.get("speaker_role_map", {}) if tp else {}
-        record("processTranscript model classification", ok,
-               f"roles={role_map}")
-
-        both = len(role_map) == 2 and all(v in ("user", "client") for v in role_map.values())
-        record("Both speakers classified", both, f"map={role_map}")
+        record("processTranscript no hints", ok,
+               f"lines={tp.get('lines_processed') if tp else 0}")
     except Exception as e:
-        record("processTranscript model classification", False, str(e))
+        record("processTranscript no hints", False, str(e))
 
     ws.close()
 
@@ -681,11 +678,14 @@ def test_ws_suggested_questions(session_id: str, agent_id: str):
             "action": "processTranscript",
             "session_id": session_id,
             "lines": [{
-                "speaker": "Host",
+                "speaker": "spk_0",
                 "text": "What is the pricing model for the enterprise tier?",
                 "timestamp": "2026-03-21T10:00:00Z",
+                "start_time": "0.00",
+                "end_time": "3.50",
+                "confidence": "0.95",
+                "is_partial": False,
             }],
-            "speaker_hint": {"Host": "user", "Client": "client"},
         }))
         messages = ws_recv_all(ws, timeout_per_msg=15.0)
         qm = find_msg(messages, "questionMatched")
@@ -698,41 +698,44 @@ def test_ws_suggested_questions(session_id: str, agent_id: str):
 
 
 # ===========================================================================
-# 14. WebSocket — Client question detection + suggested response
+# 14. WebSocket — Question detection + suggested response
 # ===========================================================================
 
-def test_ws_client_question_detection(session_id: str, agent_id: str):
-    print("\n── Client Question Detection & Suggested Response ──")
+def test_ws_question_detection(session_id: str, agent_id: str):
+    print("\n── Question Detection & Suggested Response ──")
 
     try:
         ws = ws_connect(session_id, agent_id)
-        record("Connect for client question detection", True)
+        record("Connect for question detection", True)
     except Exception as e:
-        record("Connect for client question detection", False, str(e))
+        record("Connect for question detection", False, str(e))
         return
 
-    # Client asks a question (question mark heuristic)
+    # Question mark heuristic
     try:
         ws.send(json.dumps({
             "action": "processTranscript",
             "session_id": session_id,
             "lines": [{
-                "speaker": "Client",
+                "speaker": "spk_0",
                 "text": "What kind of security certifications does your platform have?",
                 "timestamp": "2026-03-21T10:01:00Z",
+                "start_time": "0.00",
+                "end_time": "4.20",
+                "confidence": "0.95",
+                "is_partial": False,
             }],
-            "speaker_hint": {"Host": "user", "Client": "client"},
         }))
         messages = ws_recv_all(ws, timeout_per_msg=30.0, max_messages=10)
-        cqd = find_msg(messages, "clientQuestionDetected")
+        qd = find_msg(messages, "questionDetected")
         sr = find_msg(messages, "suggestedResponse")
 
-        record("Client question detected (? mark)", cqd is not None,
-               f"method={cqd.get('detection_method') if cqd else 'N/A'}")
+        record("Question detected (? mark)", qd is not None,
+               f"method={qd.get('detection_method') if qd else 'N/A'}")
         record("Suggested response received", sr is not None,
                f"len={len(sr.get('suggested_answer', '')) if sr else 0}")
     except Exception as e:
-        record("Client question detection", False, str(e))
+        record("Question detection", False, str(e))
 
     # Short text should NOT be detected
     try:
@@ -740,15 +743,19 @@ def test_ws_client_question_detection(session_id: str, agent_id: str):
             "action": "processTranscript",
             "session_id": session_id,
             "lines": [{
-                "speaker": "Client",
+                "speaker": "spk_0",
                 "text": "How much?",
                 "timestamp": "2026-03-21T10:02:00Z",
+                "start_time": "5.00",
+                "end_time": "5.80",
+                "confidence": "0.90",
+                "is_partial": False,
             }],
         }))
         messages = ws_recv_all(ws, timeout_per_msg=10.0, max_messages=5)
-        cqd = find_msg(messages, "clientQuestionDetected")
-        record("Short text NOT detected (<5 words)", cqd is None,
-               "correctly skipped" if cqd is None else "incorrectly detected")
+        qd = find_msg(messages, "questionDetected")
+        record("Short text NOT detected (<5 words)", qd is None,
+               "correctly skipped" if qd is None else "incorrectly detected")
     except Exception as e:
         record("Short text skip", False, str(e))
 
@@ -854,28 +861,30 @@ def test_ws_edge_cases(session_id: str, agent_id: str):
             "action": "processTranscript",
             "session_id": session_id,
             "lines": [
-                {"speaker": "Solo", "text": "I'm presenting to myself today."},
-                {"speaker": "Solo", "text": "Let me review the quarterly numbers."},
+                {"speaker": "spk_0", "text": "I'm presenting to myself today.",
+                 "start_time": "0.00", "end_time": "2.50", "confidence": "0.95", "is_partial": False},
+                {"speaker": "spk_0", "text": "Let me review the quarterly numbers.",
+                 "start_time": "3.00", "end_time": "5.80", "confidence": "0.93", "is_partial": False},
             ],
         }))
         messages = ws_recv_all(ws, timeout_per_msg=10.0)
         tp = find_msg(messages, "transcriptProcessed")
-        role_map = tp.get("speaker_role_map", {}) if tp else {}
         record("Single speaker transcript", tp is not None,
-               f"roles={role_map}")
+               f"lines={tp.get('lines_processed') if tp else 0}")
     except Exception as e:
         record("Single speaker transcript", False, str(e))
 
     # Large batch (10 lines)
     try:
-        lines = [{"speaker": "A", "text": f"Line {i} of the large batch test."} for i in range(10)]
+        lines = [{"speaker": "spk_0", "text": f"Line {i} of the large batch test.",
+                   "start_time": f"{i * 3.0:.2f}", "end_time": f"{i * 3.0 + 2.5:.2f}",
+                   "confidence": "0.95", "is_partial": False} for i in range(10)]
         ws.send(json.dumps({
             "action": "processTranscript",
             "session_id": session_id,
             "lines": lines,
-            "speaker_hint": {"A": "user"},
         }))
-        messages = ws_recv_all(ws, timeout_per_msg=15.0)
+        messages = ws_recv_all(ws, timeout_per_msg=60.0, max_messages=30)
         tp = find_msg(messages, "transcriptProcessed")
         record("Large batch (10 lines)",
                tp is not None and tp.get("lines_processed") == 10,
@@ -977,15 +986,23 @@ def main():
     print(f"\n{INFO}  Waiting 3s for session state to settle...")
     time.sleep(3)
 
-    test_ws_process_transcript_hints(ws_session, agent_id)
-    test_ws_process_transcript_model(ws_session, agent_id)
+    test_ws_process_transcript_basic(ws_session, agent_id)
+    test_ws_process_transcript_no_hints(ws_session, agent_id)
     test_ws_suggested_questions(ws_session, agent_id)
-    test_ws_client_question_detection(ws_session, agent_id)
+    test_ws_question_detection(ws_session, agent_id)
     test_ws_meeting_lifecycle(ws_session, agent_id)
     test_ws_edge_cases(ws_session, agent_id)
 
+    # --- Re-auth before cleanup (token may have expired during long WS tests) ---
+    print(f"\n{INFO}  Re-authenticating for cleanup...")
+    r = rest("POST", "/auth/admin/login", body={
+        "username": ADMIN_USERNAME,
+        "password": ADMIN_PASSWORD,
+    })
+    cleanup_token = r.json().get("data", {}).get("access_token", token)
+
     # --- Cleanup ---
-    cleanup(token, agent_id, personality_id, skill_id, credential_id,
+    cleanup(cleanup_token, agent_id, personality_id, skill_id, credential_id,
             project_id, session_id, qa_pair_id)
 
     # --- Summary ---

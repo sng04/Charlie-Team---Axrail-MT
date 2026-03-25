@@ -61,6 +61,8 @@
 | text | String | |
 | timestamp | String | |
 
+> **Note:** The `speaker_role` field is no longer populated by the processing pipeline for single-channel transcripts. It is retained in the schema for backward compatibility with existing data. New transcript entries will not include this field.
+
 ### BotCredentials
 | Field | Type | Key |
 |---|---|---|

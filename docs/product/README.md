@@ -6,8 +6,8 @@ AXRAIL Meeting Tool (MT) is an AI-powered meeting assistant platform that joins 
 
 ## Core Capabilities
 
-- Real-time transcript processing with speaker classification
-- Knowledge base search during live meetings (suggested responses to client questions)
+- Real-time transcript processing with question detection and matching
+- Knowledge base search during live meetings (suggested responses to detected questions)
 - Pre-set question matching against meeting topics
 - Automatic QA pair extraction from conversations
 - Knowledge gap analysis (on-demand and scheduled)

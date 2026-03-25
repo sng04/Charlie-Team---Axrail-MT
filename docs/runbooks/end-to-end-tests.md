@@ -31,8 +31,8 @@ The two test case scripts follow the same 16-step flow:
 3. Create agent and personality via REST
 4. Upload skill documents via pre-signed URL flow
 5. Create project and session, load transcript into DynamoDB
-6. WebSocket: `processTranscript` — speaker classification
-7. WebSocket: `processTranscript` — client question detection
+6. WebSocket: `processTranscript` — transcript processing
+7. WebSocket: `processTranscript` — question detection
 8. WebSocket: `sendMessage` — KB chat
 9. WebSocket: `detectQuestion` — on-demand answering
 10. WebSocket: `analyzeGaps` — knowledge gap analysis
@@ -86,8 +86,8 @@ Each script prints results for all 16 tests. Review output against the expected 
 
 Key things to verify:
 - Authentication returns a valid JWT token
-- Speaker classification correctly identifies user vs client roles
-- Client question detection fires `clientQuestionDetected` events with KB-sourced suggested responses
+- Transcript processing correctly handles single-channel input (all lines processed uniformly)
+- Question detection fires `questionDetected` events with KB-sourced suggested responses
 - Question matching produces `questionMatched` events for pre-set topics
 - `endMeeting` generates a Markdown summary with attendees, topics, decisions, and action items
 - `retroAnalysis` provides coaching feedback citing specific transcript moments
@@ -110,7 +110,7 @@ The Ingestion and SkillIngestion Lambdas are triggered by S3 events. Check Cloud
 
 1. `setSuggestedQuestions` stores embeddings asynchronously. If the matching test runs before DynamoDB write completes, no questions are found. The test includes a wait, but under heavy load this may not be enough.
 2. Embeddings must be stored as `Decimal` values. If raw `float` values are passed to `put_item`, the write silently fails.
-3. Question matching only runs for `speaker_role == "user"`. If `speaker_hint` is not provided, the speaker may not be classified as "user".
+3. Question matching runs on all non-partial lines. If lines are marked as `is_partial: true`, they are skipped. Ensure test fixture lines have `is_partial: false`.
 
 ### WebSocket timeout
 
