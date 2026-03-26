@@ -8,6 +8,7 @@ Admin only (enforced by Lambda Authorizer).
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -17,6 +18,8 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, ConflictError
+
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
 logger = Logger()
 tracer = Tracer()
@@ -42,6 +45,22 @@ def _validate_input(data: dict) -> None:
     missing = [f for f in required_fields if f not in data or data[f] is None]
     if missing:
         raise BadRequestError(f"Missing required fields: {', '.join(missing)}")
+
+    # Validate email format
+    email = data.get("email", "").strip()
+    if not email or not EMAIL_REGEX.match(email):
+        raise BadRequestError("Invalid email format")
+
+    # Validate password not empty
+    password = data.get("password", "")
+    if not password or not password.strip():
+        raise BadRequestError("Password cannot be empty")
+
+    # Validate warm_pool_size if provided
+    if "warm_pool_size" in data:
+        warm_pool_size = data.get("warm_pool_size")
+        if not isinstance(warm_pool_size, int) or warm_pool_size < 0:
+            raise BadRequestError("warm_pool_size must be a non-negative integer")
 
 
 def _normalize_password(password: str) -> str:
@@ -114,7 +133,7 @@ def lambda_handler(event, context):
         _store_password(credential_id, normalized_password)
 
         warm_pool_size = data.get("warm_pool_size", 1)
-        if not isinstance(warm_pool_size, int) or warm_pool_size < 1:
+        if not isinstance(warm_pool_size, int) or warm_pool_size < 0:
             warm_pool_size = 1
 
         item = {

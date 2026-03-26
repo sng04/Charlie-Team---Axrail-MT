@@ -20,6 +20,7 @@ tracer = Tracer()
 
 dynamodb = boto3.resource("dynamodb")
 sessions_table = dynamodb.Table(os.environ.get("SESSIONS_TABLE"))
+projects_table = dynamodb.Table(os.environ.get("PROJECTS_TABLE"))
 project_users_table = dynamodb.Table(os.environ.get("PROJECT_USERS_TABLE"))
 
 
@@ -43,6 +44,17 @@ def _is_user_assigned_to_project(user_id: str, project_id: str) -> bool:
     return project_id in assigned_projects
 
 
+def _get_project_name(project_id: str) -> str | None:
+    """Get project name by project_id."""
+    response = projects_table.get_item(
+        Key={"project_id": project_id},
+        ProjectionExpression="#name",
+        ExpressionAttributeNames={"#name": "name"},
+    )
+    item = response.get("Item")
+    return item.get("name") if item else None
+
+
 @tracer.capture_lambda_handler
 def lambda_handler(event, context):
     try:
@@ -64,6 +76,11 @@ def lambda_handler(event, context):
             project_id = session.get("project_id")
             if not _is_user_assigned_to_project(user_id, project_id):
                 raise UnauthorizedError("You don't have access to this session")
+        
+        # Add project_name to response
+        project_name = _get_project_name(session.get("project_id"))
+        if project_name:
+            session["project_name"] = project_name
         
         return createResponse(200, "Session retrieved successfully", session)
     except UnauthorizedError as e:

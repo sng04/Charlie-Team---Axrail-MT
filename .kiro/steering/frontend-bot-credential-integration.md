@@ -35,32 +35,35 @@ Example: `https://abc123.execute-api.ap-southeast-1.amazonaws.com/dev`
        │                   │                                       │
        │                   │ (invalid)                             ▼
        │                   ▼                                ┌─────────────┐
-       │            ┌─────────────┐                         │  Assign to  │
-       │            │  Deleted    │                         │   Project   │
-       │            │ (auto-cleanup)                        └─────────────┘
-       │            └─────────────┘                                │
-       │                                                           ▼
-       │                                                    ┌─────────────┐
-       │                                                    │  Start Warm │
-       │                                                    │    Pool     │
+       │            ┌──────────────────┐                    │  Assign to  │
+       │            │ verification_    │                    │   Project   │
+       │            │ failed           │                    └─────────────┘
+       │            │ (can retry)      │                           │
+       │            └──────────────────┘                           ▼
+       │                   │                                ┌─────────────┐
+       │                   │ (update email/password)        │  Start Warm │
+       │                   └───────────────────────────────▶│    Pool     │
        │                                                    └─────────────┘
 ```
 
 ### Verification Flow (Async SMTP Validation)
 
 1. Admin creates credential via `POST /bot-credentials`
-2. Backend saves credential with `verification_status: "validating"`
-3. EventBridge triggers async SMTP validation worker
-4. Worker attempts SMTP login with email/password
-5. If valid: status updated to `"verified"`
-6. If invalid: credential and secret are deleted automatically
-7. Frontend polls `GET /bot-credentials/{id}/verify` to check status
+2. Backend validates input (email format, password not empty, warm_pool_size >= 0)
+3. Backend saves credential with `verification_status: "validating"`
+4. EventBridge triggers async SMTP validation worker
+5. Worker attempts SMTP login with email/password
+6. If valid: status updated to `"verified"`, `available_status` set to `"active"`
+7. If invalid: status updated to `"verification_failed"` with `verification_error` message
+8. Frontend polls `GET /bot-credentials/{id}/verify` to check status
+9. If failed, admin can update email/password via `PUT /bot-credentials/{id}` to retry
 
 ### Status Fields
 
 | Field | Values | Description |
 |-------|--------|-------------|
-| `verification_status` | `validating`, `verified`, `invalid` | SMTP validation state |
+| `verification_status` | `validating`, `verified`, `verification_failed` | SMTP validation state |
+| `verification_error` | string | Error message when verification_failed |
 | `available_status` | `inactive`, `active` | Whether credential can be used |
 
 ---
@@ -90,13 +93,20 @@ Authorization: Bearer {admin_access_token}
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `email` | string | Yes | Bot account email |
-| `password` | string | Yes | Bot account password (hyphens auto-removed) |
-| `warm_pool_size` | integer | No | Number of warm containers (default: 1) |
+| `email` | string | Yes | Bot account email (valid email format) |
+| `password` | string | Yes | Bot account password (cannot be empty, hyphens auto-removed) |
+| `warm_pool_size` | integer | No | Number of warm containers (default: 1, min: 0) |
+
+**Input Validation:**
+- Email: Must be valid email format (regex validated)
+- Password: Cannot be empty or whitespace only
+- warm_pool_size: Must be non-negative integer (>= 0)
 
 **Supported Email Providers:**
 - Gmail (`@gmail.com`, `@googlemail.com`) - requires App Password if 2FA enabled
+- Google Workspace (custom domains with Google MX records)
 - Outlook (`@outlook.com`, `@hotmail.com`, `@live.com`) - requires App Password if 2FA enabled
+- Microsoft 365 (custom domains with Microsoft MX records)
 - Yahoo (`@yahoo.com`)
 - iCloud (`@icloud.com`, `@me.com`)
 - Zoho (`@zoho.com`)
@@ -120,7 +130,7 @@ Authorization: Bearer {admin_access_token}
 ```
 
 **Error Responses:**
-- `400`: Missing required fields (email, password)
+- `400`: Missing required fields / Invalid email format / Password cannot be empty / Invalid warm_pool_size
 - `401`: Unauthorized (not admin)
 - `409`: Bot credential with email already exists
 - `500`: Internal server error
@@ -234,10 +244,16 @@ Authorization: Bearer {admin_access_token}
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `email` | string | New email (triggers re-verification) |
-| `password` | string | New password |
+| `email` | string | New email (valid format, triggers re-verification) |
+| `password` | string | New password (cannot be empty, triggers re-verification) |
 | `available_status` | string | `active` or `inactive` |
-| `warm_pool_size` | integer | Number of warm containers |
+| `warm_pool_size` | integer | Number of warm containers (>= 0) |
+
+**Input Validation:**
+- Email: Must be valid email format (regex validated)
+- Password: Cannot be empty or whitespace only
+- warm_pool_size: Must be non-negative integer (>= 0)
+- available_status: Must be "active" or "inactive"
 
 **Success Response (200):**
 ```json
@@ -258,7 +274,7 @@ Authorization: Bearer {admin_access_token}
 ```
 
 **Error Responses:**
-- `400`: No update data provided / Invalid available_status / Invalid warm_pool_size
+- `400`: No update data provided / Invalid email format / Password cannot be empty / Invalid available_status / Invalid warm_pool_size
 - `401`: Unauthorized (not admin)
 - `404`: Bot credential not found
 - `409`: Bot credential with email already exists
@@ -332,13 +348,26 @@ Authorization: Bearer {admin_access_token}
 }
 ```
 
+**Success Response (200) - Verification Failed:**
+```json
+{
+  "statusCode": 200,
+  "status": true,
+  "message": "Email credentials validation failed",
+  "data": {
+    "credential_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "email": "bot@example.com",
+    "verification_status": "verification_failed",
+    "verification_error": "Invalid email or password. For Gmail/Outlook, use App Password if 2FA is enabled."
+  }
+}
+```
+
 **Error Responses:**
 - `400`: Credential ID is required
 - `401`: Unauthorized (not admin)
-- `404`: Bot credential not found (may have been deleted due to invalid credentials)
+- `404`: Bot credential not found
 - `500`: Internal server error
-
-**Note:** If credential is not found (404), it means SMTP validation failed and the credential was automatically deleted.
 
 ---
 
@@ -564,6 +593,24 @@ Authorization: Bearer {admin_access_token}
         <button>Delete</button>
       </td>
     </tr>
+    <!-- Failed verification row -->
+    <tr>
+      <td>
+        invalid@example.com
+        <span class="text-red text-sm">Invalid credentials</span>
+      </td>
+      <td>
+        <span class="badge badge-danger">Failed</span>
+        <button class="btn-sm">Retry</button>
+      </td>
+      <td><toggle disabled /></td>
+      <td>1</td>
+      <td>-</td>
+      <td>
+        <button>Edit</button>
+        <button>Delete</button>
+      </td>
+    </tr>
   </tbody>
 </table>
 ```
@@ -591,17 +638,31 @@ Authorization: Bearer {admin_access_token}
 - Error message display
 
 **Form Validation:**
-- Email: Valid email format
-- Password: Required for create
-- Warm Pool Size: Positive integer
+- Email: Valid email format (regex: `/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/`)
+- Password: Required for create, cannot be empty
+- Warm Pool Size: Non-negative integer (>= 0)
 
 **Create Flow:**
 ```javascript
 async function createCredential(data) {
+  // Frontend validation
+  if (!isValidEmail(data.email)) {
+    showError('Invalid email format');
+    return;
+  }
+  if (!data.password || !data.password.trim()) {
+    showError('Password cannot be empty');
+    return;
+  }
+  if (data.warmPoolSize !== undefined && (data.warmPoolSize < 0 || !Number.isInteger(data.warmPoolSize))) {
+    showError('Warm pool size must be a non-negative integer');
+    return;
+  }
+
   const response = await apiCall('POST', '/bot-credentials', {
     email: data.email,
     password: data.password,
-    warm_pool_size: data.warmPoolSize || 1
+    warm_pool_size: data.warmPoolSize ?? 1
   });
   
   if (response.status) {
@@ -609,6 +670,11 @@ async function createCredential(data) {
     // Start polling for verification status
     pollVerificationStatus(response.data.credential_id);
   }
+}
+
+function isValidEmail(email) {
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  return emailRegex.test(email);
 }
 
 // Poll verification status every 2 seconds
@@ -627,6 +693,14 @@ async function pollVerificationStatus(credentialId, maxAttempts = 30) {
         return;
       }
       
+      if (response.data.verification_status === 'verification_failed') {
+        const errorMsg = response.data.verification_error || 'Verification failed';
+        showError(`Verification failed: ${errorMsg}`);
+        // Keep modal open so user can update credentials
+        setFormError(errorMsg);
+        return;
+      }
+      
       if (response.data.verification_status === 'validating' && attempts < maxAttempts) {
         setTimeout(poll, 2000);
         return;
@@ -637,12 +711,7 @@ async function pollVerificationStatus(credentialId, maxAttempts = 30) {
       refreshList();
       closeModal();
     } catch (error) {
-      if (error.status === 404) {
-        // Credential was deleted due to invalid credentials
-        showError('Invalid email credentials. Please check your email and password (use App Password for Gmail/Outlook with 2FA).');
-        closeModal();
-        return;
-      }
+      showError('Error checking verification status');
       throw error;
     }
   };
@@ -654,10 +723,24 @@ async function pollVerificationStatus(credentialId, maxAttempts = 30) {
 **Edit Flow:**
 ```javascript
 async function updateCredential(credentialId, data) {
+  // Frontend validation
+  if (data.email && !isValidEmail(data.email)) {
+    showError('Invalid email format');
+    return;
+  }
+  if (data.password !== undefined && (!data.password || !data.password.trim())) {
+    showError('Password cannot be empty');
+    return;
+  }
+  if (data.warmPoolSize !== undefined && (data.warmPoolSize < 0 || !Number.isInteger(data.warmPoolSize))) {
+    showError('Warm pool size must be a non-negative integer');
+    return;
+  }
+
   const payload = {};
   if (data.email) payload.email = data.email;
   if (data.password) payload.password = data.password;
-  if (data.warmPoolSize) payload.warm_pool_size = data.warmPoolSize;
+  if (data.warmPoolSize !== undefined) payload.warm_pool_size = data.warmPoolSize;
   if (data.availableStatus !== undefined) {
     payload.available_status = data.availableStatus ? 'active' : 'inactive';
   }
@@ -665,12 +748,35 @@ async function updateCredential(credentialId, data) {
   const response = await apiCall('PUT', `/bot-credentials/${credentialId}`, payload);
   
   if (response.status) {
-    const message = response.message.includes('Verification') 
-      ? 'Credential updated. Please verify new email.'
-      : 'Credential updated successfully.';
-    showSuccess(message);
-    refreshList();
-    closeModal();
+    if (response.message.includes('Re-validating')) {
+      showInfo('Credential updated. Re-validating email credentials...');
+      // Start polling for verification status
+      pollVerificationStatus(credentialId);
+    } else {
+      showSuccess('Credential updated successfully.');
+      refreshList();
+      closeModal();
+    }
+  }
+}
+```
+
+**Retry Failed Verification Flow:**
+```javascript
+// When verification_status is 'verification_failed', show retry option
+async function retryVerification(credentialId, newPassword) {
+  if (!newPassword || !newPassword.trim()) {
+    showError('Password cannot be empty');
+    return;
+  }
+
+  const response = await apiCall('PUT', `/bot-credentials/${credentialId}`, {
+    password: newPassword
+  });
+  
+  if (response.status) {
+    showInfo('Re-validating email credentials...');
+    pollVerificationStatus(credentialId);
   }
 }
 ```
@@ -884,7 +990,7 @@ async function apiCall(method, url, body = null) {
   color: #1E40AF;
 }
 
-.badge-invalid {
+.badge-verification-failed {
   background: #FEE2E2;
   color: #991B1B;
 }

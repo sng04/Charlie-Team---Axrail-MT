@@ -8,6 +8,7 @@ If email or password is changed, triggers async SMTP re-validation.
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 from aws_lambda_powertools import Logger, Tracer
@@ -16,6 +17,8 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError, ConflictError
+
+EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
 logger = Logger()
 tracer = Tracer()
@@ -127,14 +130,21 @@ def lambda_handler(event, context):
 
         for key in allowed_fields:
             if key in data:
-                if key == "email" and data[key] != existing.get("email"):
-                    _check_email_exists(data[key], credential_id)
-                    update_data["email"] = data[key]
-                    update_data["verification_status"] = "validating"
-                    new_email = data[key]
-                    needs_revalidation = True
+                if key == "email":
+                    email = data[key].strip() if data[key] else ""
+                    if not email or not EMAIL_REGEX.match(email):
+                        raise BadRequestError("Invalid email format")
+                    if email != existing.get("email"):
+                        _check_email_exists(email, credential_id)
+                        update_data["email"] = email
+                        update_data["verification_status"] = "validating"
+                        new_email = email
+                        needs_revalidation = True
                 elif key == "password":
-                    normalized_password = _normalize_password(data[key])
+                    password = data[key]
+                    if not password or not password.strip():
+                        raise BadRequestError("Password cannot be empty")
+                    normalized_password = _normalize_password(password)
                     _update_password(credential_id, normalized_password)
                     # Re-validate if password changed
                     if not needs_revalidation:
@@ -145,8 +155,8 @@ def lambda_handler(event, context):
                         raise BadRequestError("available_status must be 'active' or 'inactive'")
                     update_data["available_status"] = data[key]
                 elif key == "warm_pool_size":
-                    if not isinstance(data[key], int) or data[key] < 1:
-                        raise BadRequestError("warm_pool_size must be a positive integer")
+                    if not isinstance(data[key], int) or data[key] < 0:
+                        raise BadRequestError("warm_pool_size must be a non-negative integer")
                     update_data["warm_pool_size"] = data[key]
 
         if not update_data and "password" not in data:
