@@ -49,12 +49,12 @@ def _check_credential_in_use(credential_id: str) -> None:
     response = projects_table.scan(
         FilterExpression="bot_credential_id = :cred_id",
         ExpressionAttributeValues={":cred_id": credential_id},
-        Limit=1,
     )
-    if response.get("Items"):
-        project = response["Items"][0]
+    projects = response.get("Items", [])
+    if projects:
+        project_names = [p.get("name", p["project_id"]) for p in projects]
         raise ConflictError(
-            f"Bot credential is assigned to project '{project.get('name', project['project_id'])}'. "
+            f"Bot credential is assigned to {len(projects)} project(s): {', '.join(project_names)}. "
             "Remove assignment before deleting."
         )
 

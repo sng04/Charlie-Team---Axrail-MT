@@ -68,8 +68,8 @@ _defaults = {
     "ENVIRONMENT": "test",
     "POWERTOOLS_SERVICE_NAME": "test",
     "LOG_LEVEL": "DEBUG",
-    "SES_SENDER_EMAIL": "test@example.com",
     "ECS_CLUSTER": "test-cluster",
+    "EVENT_BUS_NAME": "default",
 }
 for k, v in _defaults.items():
     os.environ.setdefault(k, v)

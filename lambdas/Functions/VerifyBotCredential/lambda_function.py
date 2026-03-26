@@ -1,12 +1,11 @@
 """
 VerifyBotCredential Lambda Function
 
-Verifies a bot credential email using the verification token.
-This endpoint is public (no auth required) as it's accessed via email link.
+Returns the current verification status of a bot credential.
+Frontend can poll this endpoint to check if async SMTP validation is complete.
 """
 
 import os
-from datetime import datetime, timezone
 
 from aws_lambda_powertools import Logger, Tracer
 import boto3
@@ -31,14 +30,6 @@ def _get_credential_id(event: dict) -> str:
     return credential_id
 
 
-def _get_token(event: dict) -> str:
-    query_params = event.get("queryStringParameters") or {}
-    token = query_params.get("token")
-    if not token:
-        raise BadRequestError("Verification token is required")
-    return token
-
-
 def _get_credential(credential_id: str) -> dict:
     response = table.get_item(Key={"credential_id": credential_id})
     if "Item" not in response:
@@ -48,41 +39,39 @@ def _get_credential(credential_id: str) -> dict:
 
 @tracer.capture_lambda_handler
 def lambda_handler(event, context):
+    """
+    Get verification status of a bot credential.
+    
+    Returns:
+    - verification_status: "validating" | "verified" | "invalid"
+    - verification_error: error message if status is "invalid"
+    """
     try:
         credential_id = _get_credential_id(event)
-        token = _get_token(event)
-
         credential = _get_credential(credential_id)
 
-        if credential.get("verification_status") == "verified":
-            return createResponse(200, "Email already verified", {
-                "credential_id": credential_id,
-                "email": credential["email"],
-                "verification_status": "verified",
-            })
-
-        stored_token = credential.get("verification_token")
-        if not stored_token or stored_token != token:
-            raise BadRequestError("Invalid or expired verification token")
-
-        now = datetime.now(timezone.utc).isoformat()
-
-        table.update_item(
-            Key={"credential_id": credential_id},
-            UpdateExpression="SET verification_status = :status, updated_at = :updated_at REMOVE verification_token",
-            ExpressionAttributeValues={
-                ":status": "verified",
-                ":updated_at": now,
-            },
-        )
-
-        logger.info(f"Bot credential {credential_id} verified successfully")
-
-        return createResponse(200, "Email verified successfully", {
+        response_data = {
             "credential_id": credential_id,
             "email": credential["email"],
-            "verification_status": "verified",
-        })
+            "verification_status": credential.get("verification_status", "unknown"),
+        }
+        
+        # Include error message if validation failed
+        if credential.get("verification_error"):
+            response_data["verification_error"] = credential["verification_error"]
+
+        status = credential.get("verification_status")
+        if status == "verified":
+            message = "Email credentials verified successfully"
+        elif status == "validating":
+            message = "Validation in progress..."
+        elif status == "invalid":
+            message = "Email credentials validation failed"
+        else:
+            message = "Unknown verification status"
+
+        return createResponse(200, message, response_data)
+        
     except BadRequestError as e:
         logger.warning(f"Bad request: {e}")
         return createResponse(400, str(e))

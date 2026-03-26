@@ -98,10 +98,11 @@ def get_gmail_credentials(credential_id: str) -> tuple:
 def update_session_status(session_id: str, status: str, task_arn: str = None, container_id: str = None) -> None:
     """Update session status in DynamoDB."""
     try:
+        now = datetime.now(timezone.utc).isoformat()
         update_expr = "SET bot_status = :status, updated_at = :updated_at"
         expr_values = {
             ":status": status,
-            ":updated_at": datetime.now(timezone.utc).isoformat(),
+            ":updated_at": now,
         }
 
         if task_arn:
@@ -111,6 +112,16 @@ def update_session_status(session_id: str, status: str, task_arn: str = None, co
         if container_id:
             update_expr += ", container_id = :container_id"
             expr_values[":container_id"] = container_id
+
+        # Set start_time when bot joins meeting
+        if status == "in_meeting":
+            update_expr += ", start_time = :start_time"
+            expr_values[":start_time"] = now
+
+        # Set end_time when session completes
+        if status == "completed":
+            update_expr += ", end_time = :end_time"
+            expr_values[":end_time"] = now
 
         sessions_table.update_item(
             Key={"session_id": session_id},
