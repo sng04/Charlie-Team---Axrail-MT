@@ -155,7 +155,14 @@ Suggested questions from the analysis are automatically stored with embeddings f
 
 ### endMeeting
 
-Generate a meeting summary, save it to S3, and mark the session as inactive.
+Generate a structured 4-chapter meeting summary, save it to S3, and mark the session as inactive.
+
+The agent retrieves the session transcript, QA pairs, and gap analysis results, then produces a markdown summary with exactly four chapters:
+
+1. **Meeting Summary** — Participants, date (ISO 8601), key topics, and decisions
+2. **Missed Agenda Items** — Gaps identified by gap analysis that were never addressed in the meeting. If no gap analysis was run, notes that no gap analysis was performed.
+3. **Action Items / Next Steps** — Concrete items with owners, deadlines, and follow-up commitments
+4. **Session Insights** — Patterns, communication effectiveness, notable moments, and recommendations
 
 Request:
 
@@ -176,11 +183,11 @@ Responses (two messages):
 {
   "type": "meetingSummary",
   "session_id": "abc123",
-  "summary_markdown": "# Meeting Summary\n\n## Date\n2025-01-15..."
+  "summary_markdown": "## Meeting Summary\n\n**Participants:** ...\n**Date:** 2025-01-15\n...\n\n## Missed Agenda Items\n\n...\n\n## Action Items / Next Steps\n\n...\n\n## Session Insights\n\n..."
 }
 ```
 
-The summary is saved to S3 at `{project_id}/summaries/{session_id}.md` and automatically ingested into the knowledge base via the Ingestion Lambda.
+The summary uses `##` level headings for each chapter. It is saved to S3 at `{project_id}/summaries/{session_id}.md` and automatically ingested into the knowledge base via the Ingestion Lambda.
 
 ---
 
@@ -399,6 +406,7 @@ The StrandsAgent has access to the following tools during WebSocket interactions
 | `get_session_transcript` | sendMessage, detectQuestion, analyzeGaps, endMeeting, retroAnalysis, retroChat | Retrieve transcript entries for a session |
 | `save_qa_pair` | extractQAPair | Persist a question-answer pair to DynamoDB |
 | `get_session_qa_pairs` | endMeeting, retroAnalysis | Retrieve QA pairs recorded during a session |
+| `get_session_gaps` | endMeeting | Retrieve stored gap analysis results for a session |
 | `save_summary_to_s3` | endMeeting | Save meeting summary markdown to S3 |
 | `get_meeting_summary` | retroAnalysis | Retrieve a previously saved meeting summary |
 

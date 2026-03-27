@@ -7,6 +7,7 @@ import boto3
 from aws_lambda_powertools import Logger, Tracer
 
 from constants import (
+    AGENT_SKILLS_TABLE_NAME,
     AGENTS_TABLE_NAME,
     DEFAULT_AGENT,
     DEFAULT_PERSONALITY_PROMPT,
@@ -83,23 +84,35 @@ def _load_personality(personality_id: str) -> str | None:
 
 
 def _load_agent_skills(agent_id: str) -> list:
-    """Load active skills for an agent from SkillsTable.
+    """Load active skills for an agent via the AgentSkills junction table.
 
-    Queries the agent-index GSI filtered by status="active".
+    Queries AgentSkills_Table by agent_id to get skill_ids, then batch-gets
+    skill records from Skills_Table filtered by status="active".
     Returns an empty list on failure or if no skills exist.
     """
-    if not agent_id or not SKILLS_TABLE_NAME:
+    if not agent_id or not AGENT_SKILLS_TABLE_NAME or not SKILLS_TABLE_NAME:
         return []
     try:
-        from boto3.dynamodb.conditions import Attr, Key
+        from boto3.dynamodb.conditions import Key
 
-        table = _get_dynamodb().Table(SKILLS_TABLE_NAME)
-        resp = table.query(
-            IndexName="agent-index",
+        # Step 1: Query junction table for assigned skill_ids
+        junction_table = _get_dynamodb().Table(AGENT_SKILLS_TABLE_NAME)
+        resp = junction_table.query(
             KeyConditionExpression=Key("agent_id").eq(agent_id),
-            FilterExpression=Attr("status").eq("active"),
         )
-        return resp.get("Items", [])
+        skill_ids = [item["skill_id"] for item in resp.get("Items", [])]
+        if not skill_ids:
+            return []
+
+        # Step 2: Batch-get skill records and filter by active status
+        skills_table = _get_dynamodb().Table(SKILLS_TABLE_NAME)
+        active_skills = []
+        for sid in skill_ids:
+            r = skills_table.get_item(Key={"skill_id": sid})
+            item = r.get("Item")
+            if item and item.get("status") == "active":
+                active_skills.append(item)
+        return active_skills
     except Exception:
         logger.exception("Failed to load skills for agent %s", agent_id)
         return []
@@ -120,10 +133,11 @@ def build_system_prompt(agent_id: str | None = None) -> tuple[str, str]:
         personality_prompt = DEFAULT_PERSONALITY_PROMPT
         logger.info("Using default personality")
 
-    if "role_prompt" in agent and "task_prompt" in agent:
+    behavior = agent.get("behavior_guidelines") or agent.get("task_prompt")
+    if agent.get("role_prompt") and behavior:
         system_prompt = (
             f"## Role\n{agent['role_prompt']}\n\n"
-            f"## Tasks\n{agent['task_prompt']}\n\n"
+            f"## Behavior Guidelines\n{behavior}\n\n"
             f"## Communication Style\n{personality_prompt}"
         )
     elif "system_prompt" in agent:

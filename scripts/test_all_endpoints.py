@@ -40,8 +40,8 @@ WS_URL = os.environ.get(
     "wss://hey8o0q9tb.execute-api.ap-southeast-1.amazonaws.com/production",
 )
 
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin@axrail.com")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "DevAdmin@123")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@12345")
 
 WS_TIMEOUT = 90  # seconds — Bedrock calls can be slow
 VERBOSE = False
@@ -332,7 +332,6 @@ def test_skills_crud(token: str, agent_id: str) -> str:
         return ""
 
     r = rest("POST", "/skills", token, body={
-        "agent_id": agent_id,
         "skill_name": f"TestSkill-{uuid.uuid4().hex[:8]}",
         "file_name": "test-skill.md",
         "description": "Integration test skill",
@@ -341,11 +340,20 @@ def test_skills_crud(token: str, agent_id: str) -> str:
     skill_data = data.get("skill", data)
     upload_url = data.get("upload_url", "")
     skill_id = skill_data.get("skill_id", "")
-    record("Create skill", r.status_code == 200 and bool(skill_id),
+    record("Create skill (standalone)", r.status_code == 200 and bool(skill_id),
            f"id={skill_id}")
 
     if not skill_id:
         return ""
+
+    # Assign skill to agent
+    r = rest("POST", f"/agents/{agent_id}/skills/{skill_id}", token)
+    record("Assign skill to agent", r.status_code == 200,
+           f"status={r.status_code}")
+
+    # Verify assignment via agent skills list
+    r = rest("GET", f"/agents/{agent_id}/skills", token)
+    record("List agent skills (assignment endpoint)", r.status_code == 200)
 
     # Upload via pre-signed URL
     if upload_url:
@@ -357,7 +365,7 @@ def test_skills_crud(token: str, agent_id: str) -> str:
         record("Upload skill file (pre-signed URL)", False, "no upload_url returned")
 
     r = rest("GET", f"/skills?agent_id={agent_id}", token)
-    record("List skills for agent", r.status_code == 200)
+    record("List skills for agent (backward compat)", r.status_code == 200)
 
     r = rest("GET", f"/skills/{skill_id}", token)
     record("Get skill", r.status_code == 200)
@@ -903,6 +911,11 @@ def cleanup(token: str, agent_id: str, personality_id: str,
             skill_id: str, credential_id: str, project_id: str,
             session_id: str, qa_pair_id: str):
     print("\n── Cleanup ──")
+
+    if skill_id and agent_id:
+        r = rest("DELETE", f"/agents/{agent_id}/skills/{skill_id}", token)
+        record("Unassign skill from agent", r.status_code in (200, 404),
+               f"status={r.status_code}")
 
     if skill_id:
         r = rest("DELETE", f"/skills/{skill_id}", token)

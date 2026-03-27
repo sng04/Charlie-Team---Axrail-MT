@@ -23,13 +23,15 @@ tracer = Tracer()
 SKILLS_TABLE_NAME = os.environ.get("SKILLS_TABLE_NAME", "")
 AGENTS_TABLE_NAME = os.environ.get("AGENTS_TABLE_NAME", "")
 SKILLS_BUCKET_NAME = os.environ.get("SKILLS_BUCKET_NAME", "")
+AGENT_SKILLS_TABLE_NAME = os.environ.get("AGENT_SKILLS_TABLE_NAME", "")
 
 dynamodb = boto3.resource("dynamodb")
 skills_table = dynamodb.Table(SKILLS_TABLE_NAME)
 agents_table = dynamodb.Table(AGENTS_TABLE_NAME)
+agent_skills_table = dynamodb.Table(AGENT_SKILLS_TABLE_NAME)
 s3_client = boto3.client("s3")
 
-REQUIRED_CREATE_FIELDS = ["agent_id", "skill_name", "file_name"]
+REQUIRED_CREATE_FIELDS = ["skill_name", "file_name"]
 UPDATABLE_FIELDS = ["skill_name", "description"]
 PRESIGNED_URL_EXPIRY = 900  # 15 minutes
 
@@ -52,12 +54,6 @@ def _validate_required(data: dict, fields: list) -> None:
         raise BadRequestError(f"Missing required fields: {', '.join(missing)}")
 
 
-def _agent_exists(agent_id: str) -> bool:
-    """Check whether an agent_id exists in AgentsTable."""
-    resp = agents_table.get_item(Key={"agent_id": agent_id})
-    return "Item" in resp
-
-
 def _generate_presigned_url(s3_key: str) -> str:
     """Generate a pre-signed PUT URL for the given S3 key."""
     return s3_client.generate_presigned_url(
@@ -68,26 +64,41 @@ def _generate_presigned_url(s3_key: str) -> str:
 
 
 def list_skills(event: dict) -> dict:
-    """Query agent-index GSI and return a paginated list of skills."""
+    """List skills, optionally filtered by agent_id."""
     params = event.get("queryStringParameters") or {}
     agent_id = params.get("agent_id")
-    if not agent_id:
-        raise BadRequestError("Missing required query parameter: agent_id")
 
     try:
         page = max(1, int(params.get("page", 1)))
     except (ValueError, TypeError):
         page = 1
     try:
-        limit = min(100, max(1, int(params.get("limit", 20))))
+        limit = min(100, max(1, int(params.get("limit", 50))))
     except (ValueError, TypeError):
-        limit = 20
+        limit = 50
 
-    resp = skills_table.query(
-        IndexName="agent-index",
-        KeyConditionExpression=Key("agent_id").eq(agent_id),
-    )
-    items = resp.get("Items", [])
+    if agent_id:
+        # Query junction table to get skill_ids for this agent
+        junction_resp = agent_skills_table.query(
+            KeyConditionExpression=Key("agent_id").eq(agent_id),
+        )
+        skill_ids = [item["skill_id"] for item in junction_resp.get("Items", [])]
+        if not skill_ids:
+            return createResponse(
+                200,
+                "Skills retrieved",
+                {"skills": [], "count": 0, "page": page, "limit": limit},
+            )
+        # Batch-get full skill records
+        items = []
+        for sid in skill_ids:
+            skill_resp = skills_table.get_item(Key={"skill_id": sid})
+            skill_item = skill_resp.get("Item")
+            if skill_item:
+                items.append(skill_item)
+    else:
+        resp = skills_table.scan()
+        items = resp.get("Items", [])
     total = len(items)
     total_pages = ceil(total / limit) if total > 0 else 1
 
@@ -96,15 +107,12 @@ def list_skills(event: dict) -> dict:
 
     return createResponse(
         200,
-        "Skills retrieved successfully",
+        "Skills retrieved",
         {
-            "items": page_items,
-            "pagination": {
-                "page": page,
-                "limit": limit,
-                "total": total,
-                "total_pages": total_pages,
-            },
+            "skills": page_items,
+            "count": len(page_items),
+            "page": page,
+            "limit": limit,
         },
     )
 
@@ -124,8 +132,13 @@ def create_skill(event: dict) -> dict:
     data = _parse_body(event)
     _validate_required(data, REQUIRED_CREATE_FIELDS)
 
-    if not _agent_exists(data["agent_id"]):
-        raise BadRequestError("Referenced agent_id does not exist")
+    # Check for duplicate name via GSI query
+    existing = skills_table.query(
+        IndexName="name-index",
+        KeyConditionExpression=Key("skill_name").eq(data["skill_name"]),
+    )
+    if existing.get("Items"):
+        return createResponse(409, "A skill with this name already exists")
 
     # Idempotency check
     idempotency_token = data.get("idempotencyToken")
@@ -141,11 +154,10 @@ def create_skill(event: dict) -> dict:
     skill_id = str(uuid.uuid4())
     file_name = data["file_name"]
     file_type = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
-    s3_key = f"{data['agent_id']}/{skill_id}/{file_name}"
+    s3_key = f"{skill_id}/{file_name}"
 
     item = {
         "skill_id": skill_id,
-        "agent_id": data["agent_id"],
         "skill_name": data["skill_name"],
         "description": data.get("description", ""),
         "s3_key": s3_key,
@@ -200,7 +212,7 @@ def update_skill(event: dict) -> dict:
 
 
 def delete_skill(event: dict) -> dict:
-    """Delete a skill record and its associated S3 object."""
+    """Delete a skill record, its junction records, and its associated S3 object."""
     skill_id = event.get("pathParameters", {}).get("skillId", "")
 
     resp = skills_table.get_item(Key={"skill_id": skill_id})
@@ -209,6 +221,22 @@ def delete_skill(event: dict) -> dict:
         raise NotFoundError("Skill not found")
 
     s3_key = item.get("s3_key", "")
+
+    # Cascade delete all junction records for this skill
+    try:
+        junction_resp = agent_skills_table.query(
+            IndexName="skill-index",
+            KeyConditionExpression=Key("skill_id").eq(skill_id),
+        )
+        for junction_item in junction_resp.get("Items", []):
+            agent_skills_table.delete_item(
+                Key={
+                    "agent_id": junction_item["agent_id"],
+                    "skill_id": junction_item["skill_id"],
+                }
+            )
+    except Exception:
+        logger.exception("Failed to delete junction records for skill %s", skill_id)
 
     skills_table.delete_item(Key={"skill_id": skill_id})
 
@@ -219,6 +247,52 @@ def delete_skill(event: dict) -> dict:
             logger.warning("Failed to delete S3 object", extra={"s3_key": s3_key})
 
     return createResponse(200, "Skill deleted successfully")
+
+
+def replace_document(event: dict) -> dict:
+    """Replace a skill's document: delete old S3 object, return new upload URL.
+
+    Deleting the S3 object triggers SkillDeletion Lambda which removes old
+    vectors from OpenSearch. Uploading the new file triggers SkillIngestion
+    which re-indexes the content.
+    """
+    skill_id = event.get("pathParameters", {}).get("skillId", "")
+
+    resp = skills_table.get_item(Key={"skill_id": skill_id})
+    item = resp.get("Item")
+    if not item:
+        raise NotFoundError("Skill not found")
+
+    s3_key = item.get("s3_key", "")
+    if not s3_key:
+        raise BadRequestError("Skill has no associated document")
+
+    # Delete old S3 object → triggers SkillDeletion → cleans OpenSearch
+    try:
+        s3_client.delete_object(Bucket=SKILLS_BUCKET_NAME, Key=s3_key)
+        logger.info("Deleted old document", extra={"s3_key": s3_key})
+    except Exception:
+        logger.exception("Failed to delete old S3 object", extra={"s3_key": s3_key})
+
+    # Reset skill status to pending
+    skills_table.update_item(
+        Key={"skill_id": skill_id},
+        UpdateExpression="SET #status = :s, #updated = :u",
+        ExpressionAttributeNames={"#status": "status", "#updated": "updated_at"},
+        ExpressionAttributeValues={
+            ":s": "pending",
+            ":u": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    # Generate new upload URL for the same S3 key
+    upload_url = _generate_presigned_url(s3_key)
+
+    return createResponse(200, "Upload new document to replace the existing one", {
+        "skill_id": skill_id,
+        "s3_key": s3_key,
+        "upload_url": upload_url,
+    })
 
 
 @tracer.capture_lambda_handler
@@ -238,6 +312,8 @@ def lambda_handler(event, context):
             return update_skill(event)
         elif resource == "/skills/{skillId}" and http_method == "DELETE":
             return delete_skill(event)
+        elif resource == "/skills/{skillId}/replace-document" and http_method == "POST":
+            return replace_document(event)
         else:
             raise BadRequestError(f"Unsupported route: {http_method} {resource}")
     except BadRequestError as e:

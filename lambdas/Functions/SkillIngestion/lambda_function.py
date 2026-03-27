@@ -141,14 +141,14 @@ def _extract_text_from_file(s3_client, bucket: str, key: str) -> str:
 
 
 def _parse_skill_key(key: str) -> tuple:
-    """Parse agent_id, skill_id, and filename from S3 key.
+    """Parse skill_id and filename from S3 key.
 
-    Expected format: {agent_id}/{skill_id}/{filename}
+    Expected format: {skill_id}/{filename}
     """
     parts = key.split("/")
-    if len(parts) < 3:
+    if len(parts) < 2:
         raise ValueError(f"Invalid skill S3 key format: {key}")
-    return parts[0], parts[1], "/".join(parts[2:])
+    return parts[0], "/".join(parts[1:])
 
 
 def _update_skill_status(skill_id: str, status: str) -> None:
@@ -183,7 +183,7 @@ def lambda_handler(event, context):
         logger.info("Processing skill upload", extra={"bucket": bucket, "key": key})
 
         try:
-            agent_id, skill_id, filename = _parse_skill_key(key)
+            skill_id, filename = _parse_skill_key(key)
         except ValueError:
             logger.error("Invalid S3 key format", extra={"key": key})
             continue
@@ -203,9 +203,8 @@ def lambda_handler(event, context):
                 document = {
                     "embedding": embedding,
                     "text": chunk,
-                    "project_id": agent_id,
+                    "skill_id": skill_id,
                     "doc_type": "agent_skill",
-                    "agent_id": agent_id,
                     "source_file": filename,
                     "chunk_index": idx,
                 }

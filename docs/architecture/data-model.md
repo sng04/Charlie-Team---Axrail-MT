@@ -88,7 +88,8 @@
 | agent_id | String | PK |
 | agent_name | String | |
 | role_prompt | String | |
-| task_prompt | String | |
+| behavior_guidelines | String | |
+| task_prompt | String | Deprecated — alias for `behavior_guidelines`. Accepted on write, included in read responses for backward compatibility. |
 | personality_id | String | FK → Personalities |
 | model_id | String | |
 | use_case | String | |
@@ -138,6 +139,14 @@
 | created_at | String (ISO 8601) | |
 | updated_at | String (ISO 8601) | |
 
+### GapAnalysisResults
+| Field | Type | Key |
+|---|---|---|
+| session_id | String | PK |
+| gaps | List of Maps | |
+| suggested_questions | List of Strings | |
+| analyzed_at | String (ISO 8601) | |
+
 ## OpenSearch
 
 ### Index: knowledge-vectors
@@ -160,3 +169,4 @@
 - Sessions → QAPairs (1:many via session-index GSI)
 - Sessions → SuggestedQuestions (1:many via session-index GSI)
 - Projects → Sessions (1:many via project-index GSI)
+- Sessions → GapAnalysisResults (1:1 via session_id)

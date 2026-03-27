@@ -12,9 +12,9 @@ from math import ceil
 
 import boto3
 from aws_lambda_powertools import Logger, Tracer
-from boto3.dynamodb.conditions import Attr
+from boto3.dynamodb.conditions import Attr, Key
 
-from custom_exceptions import BadRequestError, NotFoundError
+from custom_exceptions import BadRequestError, ConflictError, NotFoundError
 from response_utils import createResponse
 
 logger = Logger()
@@ -22,19 +22,39 @@ tracer = Tracer()
 
 AGENTS_TABLE_NAME = os.environ.get("AGENTS_TABLE_NAME", "")
 PERSONALITIES_TABLE_NAME = os.environ.get("PERSONALITIES_TABLE_NAME", "")
+AGENT_SKILLS_TABLE_NAME = os.environ.get("AGENT_SKILLS_TABLE_NAME", "")
 
 dynamodb = boto3.resource("dynamodb")
 agents_table = dynamodb.Table(AGENTS_TABLE_NAME)
 personalities_table = dynamodb.Table(PERSONALITIES_TABLE_NAME)
+agent_skills_table = dynamodb.Table(AGENT_SKILLS_TABLE_NAME)
 
 REQUIRED_AGENT_FIELDS = [
     "agent_name",
     "role_prompt",
-    "task_prompt",
+    "behavior_guidelines",
     "personality_id",
     "model_id",
     "use_case",
 ]
+
+
+def _normalize_behavior_field(data: dict) -> dict:
+    """Normalize task_prompt → behavior_guidelines for backward compatibility."""
+    if "behavior_guidelines" not in data and "task_prompt" in data:
+        data["behavior_guidelines"] = data.pop("task_prompt")
+    elif "behavior_guidelines" in data and "task_prompt" in data:
+        data.pop("task_prompt")
+    return data
+
+
+def _enrich_response(item: dict) -> dict:
+    """Ensure both behavior_guidelines and task_prompt are in the response."""
+    if "behavior_guidelines" in item and "task_prompt" not in item:
+        item["task_prompt"] = item["behavior_guidelines"]
+    elif "task_prompt" in item and "behavior_guidelines" not in item:
+        item["behavior_guidelines"] = item["task_prompt"]
+    return item
 
 
 def _parse_body(event: dict) -> dict:
@@ -80,6 +100,7 @@ def list_agents(event: dict) -> dict:
 
     start = (page - 1) * limit
     page_items = items[start : start + limit]
+    page_items = [_enrich_response(item) for item in page_items]
 
     return createResponse(
         200,
@@ -103,16 +124,26 @@ def get_agent(event: dict) -> dict:
     item = resp.get("Item")
     if not item:
         raise NotFoundError("Agent not found")
+    item = _enrich_response(item)
     return createResponse(200, "Agent retrieved successfully", item)
 
 
 def create_agent(event: dict) -> dict:
     """Create a new agent record after validating required fields and FK."""
     data = _parse_body(event)
+    data = _normalize_behavior_field(data)
     _validate_required(data, REQUIRED_AGENT_FIELDS)
 
     if not _personality_exists(data["personality_id"]):
         raise BadRequestError("Referenced personality_id does not exist")
+
+    # Check for duplicate name via GSI query
+    existing = agents_table.query(
+        IndexName="name-index",
+        KeyConditionExpression=Key("agent_name").eq(data["agent_name"]),
+    )
+    if existing.get("Items"):
+        return createResponse(409, "An agent with this name already exists")
 
     # Idempotency check
     idempotency_token = data.get("idempotencyToken")
@@ -146,6 +177,8 @@ def update_agent(event: dict) -> dict:
 
     if not data:
         raise BadRequestError("No update fields provided")
+
+    data = _normalize_behavior_field(data)
 
     resp = agents_table.get_item(Key={"agent_id": agent_id})
     if "Item" not in resp:
@@ -182,12 +215,27 @@ def update_agent(event: dict) -> dict:
 
 
 def delete_agent(event: dict) -> dict:
-    """Delete an agent by agentId."""
+    """Delete an agent by agentId, cascading junction record deletions."""
     agent_id = event.get("pathParameters", {}).get("agentId", "")
 
     resp = agents_table.get_item(Key={"agent_id": agent_id})
     if "Item" not in resp:
         raise NotFoundError("Agent not found")
+
+    # Cascade delete all junction records for this agent
+    try:
+        junction_resp = agent_skills_table.query(
+            KeyConditionExpression=Key("agent_id").eq(agent_id),
+        )
+        for junction_item in junction_resp.get("Items", []):
+            agent_skills_table.delete_item(
+                Key={
+                    "agent_id": junction_item["agent_id"],
+                    "skill_id": junction_item["skill_id"],
+                }
+            )
+    except Exception:
+        logger.exception("Failed to delete junction records for agent %s", agent_id)
 
     agents_table.delete_item(Key={"agent_id": agent_id})
     return createResponse(200, "Agent deleted successfully")
@@ -222,6 +270,10 @@ def lambda_handler(event, context):
         logger.warning("Not found", extra={"error": str(e)})
         tracer.put_annotation("error", str(e))
         return createResponse(404, str(e))
+    except ConflictError as e:
+        logger.warning("Conflict", extra={"error": str(e)})
+        tracer.put_annotation("error", str(e))
+        return createResponse(409, str(e))
     except Exception:
         logger.exception("Internal server error")
         tracer.put_annotation("error", "internal_server_error")

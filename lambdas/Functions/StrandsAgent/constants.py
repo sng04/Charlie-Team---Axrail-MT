@@ -12,6 +12,8 @@ SESSIONS_TABLE_NAME = os.environ.get("SESSIONS_TABLE_NAME", "")
 TRANSCRIPTS_TABLE_NAME = os.environ.get("TRANSCRIPTS_TABLE_NAME", "")
 SUGGESTED_QUESTIONS_TABLE_NAME = os.environ.get("SUGGESTED_QUESTIONS_TABLE_NAME", "")
 SKILLS_TABLE_NAME = os.environ.get("SKILLS_TABLE_NAME", "")
+AGENT_SKILLS_TABLE_NAME = os.environ.get("AGENT_SKILLS_TABLE_NAME", "")
+GAP_ANALYSIS_TABLE_NAME = os.environ.get("GAP_ANALYSIS_TABLE_NAME", "")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 WEBSOCKET_ENDPOINT = os.environ.get("WEBSOCKET_ENDPOINT", "")
 
@@ -43,7 +45,7 @@ DEFAULT_AGENT = {
         "by answering questions, providing context from the knowledge base, "
         "and summarizing discussions."
     ),
-    "task_prompt": (
+    "behavior_guidelines": (
         "1. Answer questions from participants using the knowledge base.\n"
         "2. Provide context from session transcripts when relevant.\n"
         "3. Summarize discussions when asked.\n"
@@ -86,20 +88,42 @@ TASK_PROMPTS = {
         "Do not include any text outside the JSON object."
     ),
     "endMeeting": (
-        "You are generating a comprehensive meeting summary. "
-        "1. Retrieve the full session transcript using get_session_transcript. "
-        "2. Retrieve QA pairs for this session using get_session_qa_pairs. "
-        "3. Generate a markdown summary with these sections:\n"
-        "   - Meeting Title (derived from main discussion topics)\n"
-        "   - Date (ISO 8601 format)\n"
-        "   - Participants (identify from conversational context and names mentioned)\n"
-        "   - Key Discussion Topics\n"
-        "   - Decisions Made\n"
-        "   - Action Items (with owners where identifiable)\n"
-        "   - Unresolved Questions\n"
-        "   - QA Pairs (from the session)\n"
-        "4. Save the summary to S3 using save_summary_to_s3. "
-        "Return the full markdown summary text."
+        "You are generating a structured meeting summary with exactly four chapters. "
+        "Follow these steps:\n\n"
+        "1. Call get_session_transcript to retrieve the full session transcript.\n"
+        "2. Call get_session_qa_pairs to retrieve QA pairs recorded during the session.\n"
+        "3. Call get_session_gaps to retrieve stored gap analysis results for the session.\n"
+        "4. Generate a markdown summary with these four chapters:\n\n"
+        "## Meeting Summary\n"
+        "Provide a concise overview of the meeting:\n"
+        "- Participants: identify from conversational context and names mentioned in the transcript\n"
+        "- Date: use ISO 8601 format\n"
+        "- Key topics discussed during the meeting\n"
+        "- Decisions made during the meeting\n\n"
+        "## Missed Agenda Items\n"
+        "Compare the transcript against the gap analysis results from get_session_gaps:\n"
+        "- List gaps that were identified in the gap analysis but never addressed in the meeting\n"
+        "- If all gaps were addressed, note that all identified gaps were covered\n"
+        "- If get_session_gaps returns no results or indicates no gap analysis was run, "
+        "note: 'No gap analysis was performed for this session.'\n"
+        "- If get_session_gaps returns an error, note that gap analysis results could not "
+        "be retrieved and continue with the remaining chapters\n\n"
+        "## Action Items / Next Steps\n"
+        "Extract concrete action items from the transcript:\n"
+        "- Include owners where identifiable from the conversation\n"
+        "- Include deadlines where mentioned\n"
+        "- Include follow-up commitments discussed during the meeting\n\n"
+        "## Session Insights\n"
+        "Provide observations about the meeting:\n"
+        "- Patterns observed during the meeting\n"
+        "- Communication effectiveness observations\n"
+        "- Notable moments\n"
+        "- Recommendations for future meetings\n\n"
+        "5. Save the complete markdown summary to S3 using save_summary_to_s3.\n"
+        "6. Return the full markdown summary text as your response.\n\n"
+        "IMPORTANT: Use ## level headings for each chapter. Do not add extra top-level "
+        "headings. The four ## headings must be: 'Meeting Summary', 'Missed Agenda Items', "
+        "'Action Items / Next Steps', and 'Session Insights'."
     ),
     "retroAnalysis": (
         "You are performing a retrospective analysis of a completed meeting. "

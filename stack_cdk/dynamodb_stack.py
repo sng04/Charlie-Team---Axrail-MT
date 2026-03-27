@@ -30,6 +30,8 @@ class DynamoDBStack(Stack):
         self._create_qa_pairs_table()
         self._create_suggested_questions_table()
         self._create_skills_table()
+        self._create_agent_skills_table()
+        self._create_gap_analysis_results_table()
         # OpenSearch
         self._create_opensearch_domain()
         self._create_exports()
@@ -69,6 +71,15 @@ class DynamoDBStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
             point_in_time_recovery=self.env_config.get("point_in_time_recovery", False),
+        )
+
+        self.projects_table.add_global_secondary_index(
+            index_name="name-index",
+            partition_key=dynamodb.Attribute(
+                name="name",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.KEYS_ONLY,
         )
 
     def _create_project_users_table(self) -> None:
@@ -243,6 +254,15 @@ class DynamoDBStack(Stack):
             point_in_time_recovery=self.env_config.get("point_in_time_recovery", False),
         )
 
+        self.agents_table.add_global_secondary_index(
+            index_name="name-index",
+            partition_key=dynamodb.Attribute(
+                name="agent_name",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.KEYS_ONLY,
+        )
+
     def _create_personalities_table(self) -> None:
         """Create Personalities table for agent personality profiles."""
         self.personalities_table = dynamodb.Table(
@@ -256,6 +276,15 @@ class DynamoDBStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
             point_in_time_recovery=self.env_config.get("point_in_time_recovery", False),
+        )
+
+        self.personalities_table.add_global_secondary_index(
+            index_name="name-index",
+            partition_key=dynamodb.Attribute(
+                name="personality_name",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.KEYS_ONLY,
         )
 
     def _create_qa_pairs_table(self) -> None:
@@ -331,12 +360,56 @@ class DynamoDBStack(Stack):
         )
 
         self.skills_table.add_global_secondary_index(
-            index_name="agent-index",
+            index_name="name-index",
+            partition_key=dynamodb.Attribute(
+                name="skill_name",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.KEYS_ONLY,
+        )
+
+
+
+    def _create_agent_skills_table(self) -> None:
+        """Create AgentSkills junction table for many-to-many agent-skill assignments."""
+        self.agent_skills_table = dynamodb.Table(
+            self,
+            "AgentSkillsTable",
+            table_name=f"{self.env_name}-AgentSkills",
             partition_key=dynamodb.Attribute(
                 name="agent_id",
                 type=dynamodb.AttributeType.STRING,
             ),
+            sort_key=dynamodb.Attribute(
+                name="skill_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
+        )
+
+        self.agent_skills_table.add_global_secondary_index(
+            index_name="skill-index",
+            partition_key=dynamodb.Attribute(
+                name="skill_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
             projection_type=dynamodb.ProjectionType.ALL,
+        )
+
+    def _create_gap_analysis_results_table(self) -> None:
+        """Create GapAnalysisResults table for persisting gap analysis."""
+        self.gap_analysis_results_table = dynamodb.Table(
+            self,
+            "GapAnalysisResultsTable",
+            table_name=f"{self.env_name}-GapAnalysisResults",
+            partition_key=dynamodb.Attribute(
+                name="session_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
+            point_in_time_recovery=self.env_config.get("point_in_time_recovery", False),
         )
 
     def _create_opensearch_domain(self) -> None:
@@ -527,6 +600,35 @@ class DynamoDBStack(Stack):
             "SkillsTableArn",
             value=self.skills_table.table_arn,
             export_name=f"AXRAIL-SkillsTableArn-{self.env_name}",
+        )
+
+        # GapAnalysisResults table exports
+        CfnOutput(
+            self,
+            "AgentSkillsTableName",
+            value=self.agent_skills_table.table_name,
+            export_name=f"AXRAIL-AgentSkillsTableName-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "AgentSkillsTableArn",
+            value=self.agent_skills_table.table_arn,
+            export_name=f"AXRAIL-AgentSkillsTableArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "GapAnalysisResultsTableName",
+            value=self.gap_analysis_results_table.table_name,
+            export_name=f"AXRAIL-GapAnalysisResultsTableName-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "GapAnalysisResultsTableArn",
+            value=self.gap_analysis_results_table.table_arn,
+            export_name=f"AXRAIL-GapAnalysisResultsTableArn-{self.env_name}",
         )
 
         # OpenSearch exports

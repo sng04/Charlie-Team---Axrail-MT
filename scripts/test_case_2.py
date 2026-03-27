@@ -240,7 +240,7 @@ def test_02_create_agent_and_personality(token: str) -> tuple:
     _print_header("TEST 2: Create Agent & Personality")
     try:
         personality_resp = _api("POST", "/personalities", token, {
-            "personality_name": "Consulting Professional",
+            "personality_name": f"Consulting Professional-{uuid.uuid4().hex[:8]}",
             "personality_prompt": (
                 "Use formal, structured language appropriate for enterprise "
                 "consulting. Reference specific regulations and standards by name. "
@@ -251,7 +251,7 @@ def test_02_create_agent_and_personality(token: str) -> tuple:
         personality_id = personality_resp.get("data", {}).get("personality_id", "")
 
         agent_resp = _api("POST", "/agents", token, {
-            "agent_name": "GreenBuild Consulting Agent",
+            "agent_name": f"GreenBuild Consulting Agent-{uuid.uuid4().hex[:8]}",
             "role_prompt": (
                 "You are an AI assistant for GreenBuild carbon reporting consultants. "
                 "You help answer client questions during kickoff and status meetings "
@@ -294,12 +294,18 @@ def test_03_skill_ingestion(token: str, agent_id: str) -> None:
             filepath = os.path.join(skills_dir, filename)
 
             skill_resp = _api("POST", "/skills", token, {
-                "agent_id": agent_id,
                 "skill_name": filename.replace(".md", "").replace("-", " ").title(),
                 "description": f"Skill document: {filename}",
                 "file_name": filename,
             })
             _print_result(f"Create skill ({filename})", skill_resp)
+
+            skill_id = skill_resp.get("data", {}).get("skill", {}).get("skill_id", "")
+
+            # Assign skill to agent
+            if skill_id:
+                assign_resp = _api("POST", f"/agents/{agent_id}/skills/{skill_id}", token)
+                _print_result(f"Assign skill to agent ({filename})", assign_resp)
 
             upload_url = skill_resp.get("data", {}).get("upload_url", "")
             if not upload_url:
@@ -723,7 +729,7 @@ def test_15_crud_cleanup(token: str) -> None:
 def _create_project(token: str) -> str:
     """Create the test project and return its project_id."""
     project_resp = _api("POST", "/projects", token, {
-        "name": "GreenBuild - Meridian Manufacturing",
+        "name": f"GreenBuild - Meridian Manufacturing-{uuid.uuid4().hex[:8]}",
         "email": "priya@greenbuild.com",
         "description": "Carbon reporting engagement for Meridian Manufacturing",
     })

@@ -245,7 +245,7 @@ def test_02_create_agent_and_personality(token: str) -> tuple:
     _print_header("TEST 2: Create Agent & Personality (CRUD)")
     try:
         personality_resp = _api("POST", "/personalities", token, {
-            "personality_name": "Sales Professional",
+            "personality_name": f"Sales Professional-{uuid.uuid4().hex[:8]}",
             "personality_prompt": (
                 "Use confident, consultative language. Be specific with numbers "
                 "and data. Maintain a friendly but professional tone."
@@ -255,7 +255,7 @@ def test_02_create_agent_and_personality(token: str) -> tuple:
         personality_id = personality_resp.get("data", {}).get("personality_id", "")
 
         agent_resp = _api("POST", "/agents", token, {
-            "agent_name": "NovaPay Sales Agent",
+            "agent_name": f"NovaPay Sales Agent-{uuid.uuid4().hex[:8]}",
             "role_prompt": (
                 "You are an AI assistant for NovaPay sales representatives. "
                 "You help answer client questions during live sales demos using "
@@ -299,12 +299,18 @@ def test_03_skill_ingestion(token: str, agent_id: str) -> None:
             filepath = os.path.join(skills_dir, filename)
 
             skill_resp = _api("POST", "/skills", token, {
-                "agent_id": agent_id,
                 "skill_name": filename.replace(".md", "").replace("-", " ").title(),
                 "description": f"Skill document: {filename}",
                 "file_name": filename,
             })
             _print_result(f"Create skill ({filename})", skill_resp)
+
+            skill_id = skill_resp.get("data", {}).get("skill", {}).get("skill_id", "")
+
+            # Assign skill to agent
+            if skill_id:
+                assign_resp = _api("POST", f"/agents/{agent_id}/skills/{skill_id}", token)
+                _print_result(f"Assign skill to agent ({filename})", assign_resp)
 
             upload_url = skill_resp.get("data", {}).get("upload_url", "")
             if not upload_url:
@@ -701,7 +707,7 @@ def test_15_crud_cleanup(token: str) -> None:
 def _create_project(token: str) -> str:
     """Create the test project and return its project_id."""
     project_resp = _api("POST", "/projects", token, {
-        "name": "NovaPay - FreshCart Demo",
+        "name": f"NovaPay - FreshCart Demo-{uuid.uuid4().hex[:8]}",
         "email": "alex@novapay.com",
         "description": "Sales demo for FreshCart retail chain",
     })

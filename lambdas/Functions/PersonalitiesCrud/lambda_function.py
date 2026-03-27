@@ -14,7 +14,7 @@ from math import ceil
 
 import boto3
 from aws_lambda_powertools import Logger, Tracer
-from boto3.dynamodb.conditions import Attr
+from boto3.dynamodb.conditions import Attr, Key
 
 from custom_exceptions import BadRequestError, ConflictError, NotFoundError
 from response_utils import createResponse
@@ -99,6 +99,14 @@ def create_personality(event: dict) -> dict:
     """Create a new personality record after validating required fields."""
     data = _parse_body(event)
     _validate_required(data, REQUIRED_PERSONALITY_FIELDS)
+
+    # Check for duplicate name via GSI query
+    existing = personalities_table.query(
+        IndexName="name-index",
+        KeyConditionExpression=Key("personality_name").eq(data["personality_name"]),
+    )
+    if existing.get("Items"):
+        return createResponse(409, "A personality with this name already exists")
 
     # Idempotency check
     idempotency_token = data.get("idempotencyToken")

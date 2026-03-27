@@ -309,6 +309,8 @@ class LambdaStack(Stack):
             "SKILLS_TABLE_NAME": self.dynamodb_stack.skills_table.table_name,
             "SESSIONS_TABLE_NAME": self.dynamodb_stack.sessions_table.table_name,
             "TRANSCRIPTS_TABLE_NAME": self.dynamodb_stack.transcripts_table.table_name,
+            "GAP_ANALYSIS_TABLE_NAME": self.dynamodb_stack.gap_analysis_results_table.table_name,
+            "AGENT_SKILLS_TABLE_NAME": self.dynamodb_stack.agent_skills_table.table_name,
         }
 
     def _create_lambda_function(
@@ -481,6 +483,17 @@ class LambdaStack(Stack):
             "SkillsCrud", "lambdas/Functions/SkillsCrud"
         )
 
+        self.agent_skills_crud_fn = self._create_lambda_function(
+            "AgentSkillsCrud", "lambdas/Functions/AgentSkillsCrud"
+        )
+
+        # Test Prompt Lambda (admin only, no persistence)
+        self.test_prompt_fn = self._create_lambda_function(
+            "TestPrompt", "lambdas/Functions/TestPrompt",
+            timeout=60,
+            memory_size=256,
+        )
+
         # AI base environment for event-driven Lambdas
         _ai_base_env = {
             **self._get_lambda_environment(),
@@ -595,6 +608,8 @@ class LambdaStack(Stack):
             self.dynamodb_stack.qa_pairs_table,
             self.dynamodb_stack.suggested_questions_table,
             self.dynamodb_stack.skills_table,
+            self.dynamodb_stack.gap_analysis_results_table,
+            self.dynamodb_stack.agent_skills_table,
         ]:
             table.grant_read_write_data(self.lambda_role)
 
