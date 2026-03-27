@@ -189,9 +189,45 @@ class ApiServicesStack(Stack):
         )
         
         users_resource = self.api.root.add_resource("users")
+
+        # GET /users - List all users (admin only)
+        users_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.list_users_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # POST /users - Create user (admin only)
         users_resource.add_method(
             "POST",
             apigw.LambdaIntegration(self.lambda_stack.create_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        user_id_resource = users_resource.add_resource("{userId}")
+
+        # GET /users/{userId} - Get single user (admin only)
+        user_id_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.get_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # PUT /users/{userId} - Update user (admin only)
+        user_id_resource.add_method(
+            "PUT",
+            apigw.LambdaIntegration(self.lambda_stack.update_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # DELETE /users/{userId} - Delete user (admin only)
+        user_id_resource.add_method(
+            "DELETE",
+            apigw.LambdaIntegration(self.lambda_stack.delete_user_fn),
             authorizer=self.admin_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
@@ -290,7 +326,9 @@ class ApiServicesStack(Stack):
         users_resource = self.api.root.get_resource("users")
         if not users_resource:
             users_resource = self.api.root.add_resource("users")
-        user_resource = users_resource.add_resource("{userId}")
+        user_resource = users_resource.get_resource("{userId}")
+        if not user_resource:
+            user_resource = users_resource.add_resource("{userId}")
         user_projects_resource = user_resource.add_resource("projects")
         user_projects_resource.add_method(
             "GET",
@@ -437,6 +475,15 @@ class ApiServicesStack(Stack):
         verify_resource.add_method(
             "GET",
             apigw.LambdaIntegration(self.lambda_stack.verify_bot_credential_fn),
+        )
+
+        # GET /bot-credentials/{credentialId}/pool - List bot pool containers (admin only)
+        pool_resource = bot_credential_resource.add_resource("pool")
+        pool_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.list_bot_pool_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
         )
 
     def _create_warm_pool_routes(self) -> None:

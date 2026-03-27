@@ -30,4 +30,4 @@ AXRAIL Meeting Tool (MT) is an AI-powered meeting assistant platform that joins 
 
 ## Product Requirements
 
-The original PRD is available at `resources/prd.pdf` in the DEVELOPER 2 archive.
+The original PRD is available at `resources/prd.pdf`.

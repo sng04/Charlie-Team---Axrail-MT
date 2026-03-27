@@ -201,6 +201,28 @@ POST /users
 GET /users
 ```
 
+### Get User
+
+```
+GET /users/{userId}
+```
+
+### Update User
+
+```
+PUT /users/{userId}
+```
+
+Updates user information in Cognito and DynamoDB. Supports updating `email`.
+
+### Delete User
+
+```
+DELETE /users/{userId}
+```
+
+Deletes the user from both Cognito and DynamoDB.
+
 ### Get User Projects
 
 ```
@@ -270,7 +292,7 @@ Returns the current bot status for the session. Requires user authentication.
 
 ## Bot Credentials (Admin only)
 
-Bot credentials store Google Meet service account credentials used by the meeting bot.
+Bot credentials store email service account credentials used by the meeting bot.
 
 ### List Bot Credentials
 
@@ -283,6 +305,22 @@ GET /bot-credentials
 ```
 POST /bot-credentials
 ```
+
+Request body:
+
+```json
+{
+  "email": "bot@gmail.com",
+  "password": "app-password",
+  "warm_pool_size": 1
+}
+```
+
+Required fields: `email`, `password`
+
+Optional fields: `warm_pool_size` (non-negative integer, defaults to 1)
+
+Creation publishes an EventBridge event for async SMTP validation. The credential is created with `verification_status: "validating"` and transitions to `"verified"` or `"verification_failed"` once the ValidateBotCredentialWorker Lambda completes SMTP authentication.
 
 ### Get Bot Credential
 
@@ -301,6 +339,19 @@ PUT /bot-credentials/{credentialId}
 ```
 DELETE /bot-credentials/{credentialId}
 ```
+
+### List Bot Pool
+
+```
+GET /bot-credentials/{credentialId}/pool
+```
+
+Admin only. Returns all warm pool containers for a credential with status summary.
+
+Query parameters:
+- `status` — Filter by container status (`idle`, `busy`, `starting`, `error`)
+
+Response includes a `summary` object with counts per status and a `containers` array.
 
 ### Verify Bot Credential Email
 

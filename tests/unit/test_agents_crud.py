@@ -20,7 +20,7 @@ SAMPLE_AGENT = {
     "agent_id": "aaaaaaaa-1111-2222-3333-444444444444",
     "agent_name": "Test Agent",
     "role_prompt": "You are a helpful assistant",
-    "task_prompt": "Answer questions",
+    "behavior_guidelines": "Answer questions",
     "personality_id": "pppppppp-1111-2222-3333-444444444444",
     "model_id": "anthropic.claude-v2",
     "use_case": "customer_support",
@@ -29,14 +29,14 @@ SAMPLE_AGENT = {
 VALID_CREATE_BODY = {
     "agent_name": "New Agent",
     "role_prompt": "You are a sales bot",
-    "task_prompt": "Sell products",
+    "behavior_guidelines": "Sell products",
     "personality_id": "pppppppp-1111-2222-3333-444444444444",
     "model_id": "anthropic.claude-v2",
     "use_case": "sales",
 }
 
 
-def _import_handler(mock_agents_table, mock_personalities_table):
+def _import_handler(mock_agents_table, mock_personalities_table, mock_agent_skills_table=None):
     """Import the agents handler with mocked DynamoDB tables."""
     sys.path.insert(0, AGENTS_CRUD_DIR)
     for mod_name in list(sys.modules.keys()):
@@ -48,6 +48,8 @@ def _import_handler(mock_agents_table, mock_personalities_table):
         mock_boto.return_value = mock_dynamo
 
         def table_side_effect(name):
+            if "agent-skills" in name.lower() or "agentskills" in name.lower():
+                return mock_agent_skills_table or MagicMock()
             if "agents" in name.lower():
                 return mock_agents_table
             return mock_personalities_table
@@ -75,6 +77,7 @@ def _env_vars():
         {
             "AGENTS_TABLE_NAME": "test-agents",
             "PERSONALITIES_TABLE_NAME": "test-personalities",
+            "AGENT_SKILLS_TABLE_NAME": "test-agent-skills",
         },
     ):
         yield
@@ -88,6 +91,7 @@ class TestAgentsHandler:
         """POST /agents with valid payload returns 200 with generated agent_id."""
         mock_agents = MagicMock()
         mock_personalities = MagicMock()
+        mock_agents.query.return_value = {"Items": []}
         mock_personalities.get_item.return_value = {
             "Item": {
                 "personality_id": VALID_CREATE_BODY["personality_id"],
@@ -131,7 +135,7 @@ class TestAgentsHandler:
             assert response["statusCode"] == 400
             body = json.loads(response["body"])
             assert body["status"] is False
-            for field in ["role_prompt", "task_prompt", "personality_id", "model_id", "use_case"]:
+            for field in ["role_prompt", "behavior_guidelines", "personality_id", "model_id", "use_case"]:
                 assert field in body["message"]
         finally:
             _cleanup()

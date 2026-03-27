@@ -67,9 +67,15 @@
 | Field | Type | Key |
 |---|---|---|
 | credential_id | String | PK |
-| verification_status | String | |
-| available_status | String | |
+| email | String | GSI: email-index |
+| verification_status | String | validating → verified / verification_failed |
+| verification_error | String | Error message (present only on failure) |
+| available_status | String | inactive → active (auto-set on verification) |
+| warm_pool_size | Number | Default 1 |
 | created_at | String (ISO 8601) | |
+| updated_at | String (ISO 8601) | |
+
+> **EventBridge integration:** Creating a bot credential publishes a `BotCredentialValidation` event to EventBridge. The `ValidateBotCredentialWorker` Lambda is triggered by an EventBridge rule to perform async SMTP validation and update the credential status.
 
 ### BotPool
 | Field | Type | Key |
@@ -139,6 +145,17 @@
 | created_at | String (ISO 8601) | |
 | updated_at | String (ISO 8601) | |
 
+### AgentSkills (Junction Table)
+| Field | Type | Key |
+|---|---|---|
+| agent_id | String | PK |
+| skill_id | String | SK |
+| assigned_at | String (ISO 8601) | |
+
+GSI: `skill-index` (PK: skill_id) for reverse lookups.
+
+Enables many-to-many relationships between agents and skills. A single skill document can be shared across multiple agents.
+
 ### GapAnalysisResults
 | Field | Type | Key |
 |---|---|---|
@@ -164,9 +181,11 @@
 ## Entity Relationships
 
 - Agents → Personalities (FK: personality_id, enforced on delete with 409)
-- Agents → Skills (1:many via agent_id GSI)
+- Agents ↔ Skills (many-to-many via AgentSkills junction table)
 - Sessions → Transcripts (1:many via composite key PK=session_id)
 - Sessions → QAPairs (1:many via session-index GSI)
 - Sessions → SuggestedQuestions (1:many via session-index GSI)
 - Projects → Sessions (1:many via project-index GSI)
 - Sessions → GapAnalysisResults (1:1 via session_id)
+- BotCredentials → BotPool (1:many via credential-status-index GSI)
+- BotCredentials → EventBridge → ValidateBotCredentialWorker (async SMTP validation)

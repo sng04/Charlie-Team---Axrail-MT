@@ -2,7 +2,7 @@
 
 ## Overview
 
-Agent Skills allow attaching specific knowledge documents to individual agents. Each agent can have its own set of skill documents (PDF or Markdown) that are ingested into the shared OpenSearch index with agent-scoped metadata. During conversations, the agent searches its skill documents first before falling back to the general knowledge base.
+Agent Skills allow attaching specific knowledge documents to agents. Skills use a many-to-many relationship via the `AgentSkills` junction table — a single skill document can be shared across multiple agents, and each agent can have multiple skills. Skill documents (PDF or Markdown) are ingested into the shared OpenSearch index with agent-scoped metadata. During conversations, the agent searches its assigned skill documents first before falling back to the general knowledge base.
 
 ## Skill Lifecycle
 

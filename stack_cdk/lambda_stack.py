@@ -56,6 +56,7 @@ class LambdaStack(Stack):
         self._grant_sqs_permissions()
         self._grant_secrets_permissions()
         self._grant_cloudformation_permissions()
+        self._grant_eventbridge_permissions()
         self._create_lambda_functions()
         self._create_d2_lambda_functions()
         self._grant_opensearch_permissions()
@@ -66,6 +67,7 @@ class LambdaStack(Stack):
         self._create_websocket_api()
         self._create_ecs_task_state_handler()
         self._create_gap_scheduler_rule()
+        self._create_bot_credential_validation_worker()
         self._create_seed_admin()
         self._create_seed_agent_data()
         self._create_exports()
@@ -178,6 +180,8 @@ class LambdaStack(Stack):
                     "cognito-idp:AdminAddUserToGroup",
                     "cognito-idp:AdminListGroupsForUser",
                     "cognito-idp:GlobalSignOut",
+                    "cognito-idp:AdminDeleteUser",
+                    "cognito-idp:AdminUpdateUserAttributes",
                 ],
                 resources=[self.cognito_stack.user_pool.user_pool_arn],
             )
@@ -279,6 +283,16 @@ class LambdaStack(Stack):
             )
         )
 
+    def _grant_eventbridge_permissions(self) -> None:
+        """Grant EventBridge permissions to publish events."""
+        self.lambda_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["events:PutEvents"],
+                resources=[f"arn:aws:events:{self.region}:{self.account}:event-bus/default"],
+            )
+        )
+
     def _get_lambda_environment(self) -> dict:
         return {
             "USER_POOL_ID": self.cognito_stack.user_pool.user_pool_id,
@@ -355,6 +369,23 @@ class LambdaStack(Stack):
 
         self.logout_fn = self._create_lambda_function(
             "Logout", "lambdas/Functions/Logout"
+        )
+
+        # User CRUD (admin only)
+        self.list_users_fn = self._create_lambda_function(
+            "ListUsers", "lambdas/Functions/ListUsers"
+        )
+
+        self.get_user_fn = self._create_lambda_function(
+            "GetUser", "lambdas/Functions/GetUser"
+        )
+
+        self.update_user_fn = self._create_lambda_function(
+            "UpdateUser", "lambdas/Functions/UpdateUser"
+        )
+
+        self.delete_user_fn = self._create_lambda_function(
+            "DeleteUser", "lambdas/Functions/DeleteUser"
         )
 
         # Project CRUD
@@ -437,6 +468,7 @@ class LambdaStack(Stack):
         self.create_bot_credential_fn = self._create_lambda_function(
             "CreateBotCredential", "lambdas/Functions/CreateBotCredential"
         )
+        self.create_bot_credential_fn.add_environment("EVENT_BUS_NAME", "default")
 
         self.list_bot_credentials_fn = self._create_lambda_function(
             "ListBotCredentials", "lambdas/Functions/ListBotCredentials"
@@ -465,6 +497,10 @@ class LambdaStack(Stack):
 
         self.stop_warm_pool_fn = self._create_lambda_function(
             "StopWarmPool", "lambdas/Functions/StopWarmPool", timeout=120
+        )
+
+        self.list_bot_pool_fn = self._create_lambda_function(
+            "ListBotPool", "lambdas/Functions/ListBotPool"
         )
 
     def _create_d2_lambda_functions(self) -> None:
@@ -837,6 +873,47 @@ class LambdaStack(Stack):
             targets.LambdaFunction(self.gap_scheduler_fn)
         )
 
+    def _create_bot_credential_validation_worker(self) -> None:
+        """Create Lambda and EventBridge rule for async bot credential SMTP validation."""
+        self.validate_bot_credential_worker_fn = _lambda.Function(
+            self,
+            "ValidateBotCredentialWorker",
+            function_name=f"AXRAIL-ValidateBotCredentialWorker-{self.env_name}",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset("lambdas/Functions/ValidateBotCredentialWorker"),
+            role=self.lambda_role,
+            layers=[
+                self.shared_layer,
+                self.powertools_layer,
+            ],
+            environment={
+                "BOT_CREDENTIALS_TABLE": self.dynamodb_stack.bot_credentials_table.table_name,
+                "ENVIRONMENT": self.env_name,
+                "POWERTOOLS_SERVICE_NAME": "axrail-bot-credential-validator",
+                "LOG_LEVEL": "INFO",
+            },
+            timeout=Duration.seconds(60),
+            memory_size=256,
+            tracing=_lambda.Tracing.ACTIVE,
+        )
+
+        # EventBridge rule to trigger validation worker
+        self.bot_credential_validation_rule = events.Rule(
+            self,
+            "BotCredentialValidationRule",
+            rule_name=f"AXRAIL-BotCredentialValidationRule-{self.env_name}",
+            description="Trigger async SMTP validation for bot credentials",
+            event_pattern=events.EventPattern(
+                source=["axrail.bot-credentials"],
+                detail_type=["BotCredentialValidation"],
+            ),
+        )
+
+        self.bot_credential_validation_rule.add_target(
+            targets.LambdaFunction(self.validate_bot_credential_worker_fn)
+        )
+
     def _create_seed_admin(self) -> None:
         """Create SeedAdmin Lambda and Custom Resource for initial admin user."""
         self.seed_admin_role = iam.Role(
@@ -970,6 +1047,34 @@ class LambdaStack(Stack):
             "LogoutFnArn",
             value=self.logout_fn.function_arn,
             export_name=f"AXRAIL-LogoutFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "ListUsersFnArn",
+            value=self.list_users_fn.function_arn,
+            export_name=f"AXRAIL-ListUsersFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "GetUserFnArn",
+            value=self.get_user_fn.function_arn,
+            export_name=f"AXRAIL-GetUserFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "UpdateUserFnArn",
+            value=self.update_user_fn.function_arn,
+            export_name=f"AXRAIL-UpdateUserFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "DeleteUserFnArn",
+            value=self.delete_user_fn.function_arn,
+            export_name=f"AXRAIL-DeleteUserFnArn-{self.env_name}",
         )
 
         CfnOutput(
@@ -1152,6 +1257,13 @@ class LambdaStack(Stack):
             "StopWarmPoolFnArn",
             value=self.stop_warm_pool_fn.function_arn,
             export_name=f"AXRAIL-StopWarmPoolFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "ListBotPoolFnArn",
+            value=self.list_bot_pool_fn.function_arn,
+            export_name=f"AXRAIL-ListBotPoolFnArn-{self.env_name}",
         )
 
         CfnOutput(

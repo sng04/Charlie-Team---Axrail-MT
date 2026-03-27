@@ -145,10 +145,10 @@ def _parse_skill_key(key: str) -> tuple:
 
     Expected format: {skill_id}/{filename}
     """
-    parts = key.split("/")
+    parts = key.split("/", 1)
     if len(parts) < 2:
         raise ValueError(f"Invalid skill S3 key format: {key}")
-    return parts[0], "/".join(parts[1:])
+    return parts[0], parts[1]
 
 
 def _update_skill_status(skill_id: str, status: str) -> None:

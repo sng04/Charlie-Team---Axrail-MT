@@ -42,7 +42,7 @@ class TestResponseEnvelope:
 # ---------------------------------------------------------------------------
 
 REQUIRED_AGENT_FIELDS = [
-    "agent_name", "role_prompt", "task_prompt",
+    "agent_name", "role_prompt", "behavior_guidelines",
     "personality_id", "model_id", "use_case",
 ]
 
@@ -70,6 +70,7 @@ class TestAgentFieldValidation:
         with patch.dict(os.environ, {
             "AGENTS_TABLE_NAME": "t-agents",
             "PERSONALITIES_TABLE_NAME": "t-personalities",
+            "AGENT_SKILLS_TABLE_NAME": "t-agent-skills",
         }):
             sys.path.insert(0, AGENTS_CRUD_DIR)
             try:

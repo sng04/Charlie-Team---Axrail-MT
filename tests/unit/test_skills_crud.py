@@ -26,14 +26,13 @@ SAMPLE_SKILL = {
 }
 
 VALID_CREATE_BODY = {
-    "agent_id": "aaaaaaaa-1111-2222-3333-444444444444",
     "skill_name": "New Skill",
     "file_name": "guide.md",
     "description": "A new skill document",
 }
 
 
-def _import_handler(mock_skills_table, mock_agents_table, mock_s3_client=None):
+def _import_handler(mock_skills_table, mock_agents_table, mock_s3_client=None, mock_agent_skills_table=None):
     """Import the skills handler with mocked DynamoDB tables and S3."""
     sys.path.insert(0, SKILLS_CRUD_DIR)
     for mod_name in list(sys.modules.keys()):
@@ -46,6 +45,8 @@ def _import_handler(mock_skills_table, mock_agents_table, mock_s3_client=None):
         mock_boto.return_value = mock_dynamo
 
         def table_side_effect(name):
+            if "agent-skills" in name.lower() or "agentskills" in name.lower():
+                return mock_agent_skills_table or MagicMock()
             if "skills" in name.lower():
                 return mock_skills_table
             return mock_agents_table
@@ -75,6 +76,7 @@ def _env_vars():
         "SKILLS_TABLE_NAME": "test-skills",
         "AGENTS_TABLE_NAME": "test-agents",
         "SKILLS_BUCKET_NAME": "test-skills-bucket",
+        "AGENT_SKILLS_TABLE_NAME": "test-agent-skills",
     }):
         yield
     _cleanup()
@@ -87,9 +89,7 @@ class TestSkillsHandler:
         """POST /skills with valid payload returns 200 with upload_url."""
         mock_skills = MagicMock()
         mock_agents = MagicMock()
-        mock_agents.get_item.return_value = {
-            "Item": {"agent_id": VALID_CREATE_BODY["agent_id"]}
-        }
+        mock_skills.query.return_value = {"Items": []}
 
         handler_mod = _import_handler(mock_skills, mock_agents)
         try:
@@ -125,7 +125,6 @@ class TestSkillsHandler:
             assert response["statusCode"] == 400
             body = json.loads(response["body"])
             assert body["status"] is False
-            assert "agent_id" in body["message"]
             assert "file_name" in body["message"]
         finally:
             _cleanup()
@@ -152,10 +151,11 @@ class TestSkillsHandler:
         finally:
             _cleanup()
 
-    def test_list_skills_missing_agent_id_returns_400(self):
-        """GET /skills without agent_id query param returns 400."""
+    def test_list_skills_without_agent_id_returns_all(self):
+        """GET /skills without agent_id returns all skills via scan."""
         mock_skills = MagicMock()
         mock_agents = MagicMock()
+        mock_skills.scan.return_value = {"Items": [SAMPLE_SKILL]}
 
         handler_mod = _import_handler(mock_skills, mock_agents)
         try:
@@ -165,10 +165,6 @@ class TestSkillsHandler:
                 "queryStringParameters": {},
             }
             response = handler_mod.lambda_handler(event, None)
-
-            assert response["statusCode"] == 400
-            body = json.loads(response["body"])
-            assert body["status"] is False
-            assert "agent_id" in body["message"]
+            assert response["statusCode"] == 200
         finally:
             _cleanup()
