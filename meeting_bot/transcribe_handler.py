@@ -434,7 +434,7 @@ class TranscribeStreamingManager:
         await self._stream_transcription()
 
     async def _stream_transcription(self) -> None:
-        """Main streaming loop."""
+        """Main streaming loop with timeout protection."""
         try:
             stream_params = {
                 "language_code": TRANSCRIBE_LANGUAGE,
@@ -456,10 +456,17 @@ class TranscribeStreamingManager:
                 self._dynamodb,
             )
 
-            await asyncio.gather(
-                self._send_audio(stream),
-                self._handler.handle_events(),
-            )
+            # Run with timeout to prevent infinite hang
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(
+                        self._send_audio(stream),
+                        self._handler.handle_events(),
+                    ),
+                    timeout=7200  # 2 hour max meeting duration
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Transcription timed out after 2 hours")
 
         except Exception as e:
             logger.error(f"Transcription error: {e}")

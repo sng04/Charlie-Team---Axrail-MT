@@ -95,45 +95,52 @@ def get_gmail_credentials(credential_id: str) -> tuple:
         raise
 
 
-def update_session_status(session_id: str, status: str, task_arn: str = None, container_id: str = None) -> None:
-    """Update session status in DynamoDB."""
-    try:
-        now = datetime.now(timezone.utc).isoformat()
-        update_expr = "SET bot_status = :status, updated_at = :updated_at"
-        expr_values = {
-            ":status": status,
-            ":updated_at": now,
-        }
+def update_session_status(session_id: str, status: str, task_arn: str = None, container_id: str = None, max_retries: int = 3) -> None:
+    """Update session status in DynamoDB with retry logic."""
+    for attempt in range(max_retries):
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            update_expr = "SET bot_status = :status, updated_at = :updated_at"
+            expr_values = {
+                ":status": status,
+                ":updated_at": now,
+            }
 
-        if task_arn:
-            update_expr += ", task_arn = :task_arn"
-            expr_values[":task_arn"] = task_arn
+            if task_arn:
+                update_expr += ", task_arn = :task_arn"
+                expr_values[":task_arn"] = task_arn
 
-        if container_id:
-            update_expr += ", container_id = :container_id"
-            expr_values[":container_id"] = container_id
+            if container_id:
+                update_expr += ", container_id = :container_id"
+                expr_values[":container_id"] = container_id
 
-        # Set start_time when bot joins meeting
-        if status == "in_meeting":
-            update_expr += ", start_time = :start_time"
-            expr_values[":start_time"] = now
+            # Set start_time when bot joins meeting
+            if status == "in_meeting":
+                update_expr += ", start_time = :start_time"
+                expr_values[":start_time"] = now
 
-        # Set end_time when session completes
-        if status == "completed":
-            update_expr += ", end_time = :end_time"
-            expr_values[":end_time"] = now
+            # Set end_time when session completes
+            if status == "completed":
+                update_expr += ", end_time = :end_time"
+                expr_values[":end_time"] = now
 
-        sessions_table.update_item(
-            Key={"session_id": session_id},
-            UpdateExpression=update_expr,
-            ConditionExpression="attribute_exists(session_id)",
-            ExpressionAttributeValues=expr_values,
-        )
-        logger.info(f"Updated session {session_id} status to: {status}")
-    except sessions_table.meta.client.exceptions.ConditionalCheckFailedException:
-        logger.warning(f"Session {session_id} not found, skipping status update")
-    except Exception as e:
-        logger.error(f"Failed to update session status: {e}")
+            sessions_table.update_item(
+                Key={"session_id": session_id},
+                UpdateExpression=update_expr,
+                ConditionExpression="attribute_exists(session_id)",
+                ExpressionAttributeValues=expr_values,
+            )
+            logger.info(f"Updated session {session_id} status to: {status}")
+            return
+        except sessions_table.meta.client.exceptions.ConditionalCheckFailedException:
+            if attempt < max_retries - 1:
+                logger.warning(f"Session {session_id} not found (attempt {attempt + 1}), retrying in 1s...")
+                time.sleep(1)  # Wait for eventual consistency
+            else:
+                logger.warning(f"Session {session_id} not found after {max_retries} attempts, skipping status update")
+        except Exception as e:
+            logger.error(f"Failed to update session status: {e}")
+            return
 
 
 class BotPoolManager:
@@ -294,6 +301,13 @@ class MeetingOrchestrator:
         logger.info(f"Starting meeting for session: {session_id}")
         logger.info(f"Meeting URL: {meeting_url}")
 
+        # Minimum duration (seconds) to consider meeting as successful
+        # If meeting ends before this, it's likely an invalid/expired link
+        MIN_MEETING_DURATION = 30
+        meeting_start_time = None
+        final_status = "completed"
+        failure_reason = None
+
         update_session_status(session_id, "joining", container_id=container_id)
 
         try:
@@ -303,6 +317,9 @@ class MeetingOrchestrator:
                 self._is_logged_in = True
 
             await self._join_meeting(self._page, meeting_url)
+            
+            # Record when we actually entered the meeting
+            meeting_start_time = time.time()
             update_session_status(session_id, "in_meeting", container_id=container_id)
 
             if ENABLE_TRANSCRIPTION:
@@ -313,11 +330,54 @@ class MeetingOrchestrator:
 
         except Exception as e:
             logger.exception(f"Error in meeting: {e}")
-            update_session_status(session_id, "failed", container_id=container_id)
-            raise
+            final_status = "failed"
+            failure_reason = str(e)
         finally:
-            update_session_status(session_id, "completed", container_id=container_id)
+            # Determine final status based on meeting duration
+            if final_status != "failed" and meeting_start_time:
+                meeting_duration = time.time() - meeting_start_time
+                logger.info(f"Meeting duration: {meeting_duration:.1f} seconds")
+                
+                if meeting_duration < MIN_MEETING_DURATION:
+                    final_status = "failed"
+                    failure_reason = "meeting_not_available"
+                    logger.warning(
+                        f"Meeting ended too quickly ({meeting_duration:.1f}s < {MIN_MEETING_DURATION}s), "
+                        "marking as failed - likely invalid/expired meeting link"
+                    )
+            
+            # Update session with final status and failure reason if applicable
+            self._update_final_status(session_id, final_status, failure_reason, container_id)
             await self._cleanup_meeting()
+
+    def _update_final_status(self, session_id: str, status: str, failure_reason: str = None, container_id: str = None) -> None:
+        """Update session with final status and optional failure reason."""
+        try:
+            now = datetime.now(timezone.utc).isoformat()
+            update_expr = "SET bot_status = :status, updated_at = :updated_at, end_time = :end_time"
+            expr_values = {
+                ":status": status,
+                ":updated_at": now,
+                ":end_time": now,
+            }
+
+            if container_id:
+                update_expr += ", container_id = :container_id"
+                expr_values[":container_id"] = container_id
+
+            if failure_reason:
+                update_expr += ", failure_reason = :failure_reason"
+                expr_values[":failure_reason"] = failure_reason
+
+            sessions_table.update_item(
+                Key={"session_id": session_id},
+                UpdateExpression=update_expr,
+                ExpressionAttributeValues=expr_values,
+            )
+            logger.info(f"Updated session {session_id} final status: {status}" + 
+                       (f" (reason: {failure_reason})" if failure_reason else ""))
+        except Exception as e:
+            logger.error(f"Failed to update final session status: {e}")
 
     async def _cleanup_meeting(self) -> None:
         """Cleanup after a meeting (but keep browser open for warm pool)."""
@@ -390,15 +450,36 @@ class MeetingOrchestrator:
         logger.info("Starting transcription service...")
         await asyncio.sleep(2)
         self._transcribe_manager = TranscribeStreamingManager(session_id)
-        asyncio.create_task(self._run_transcription())
+        self._transcription_task = asyncio.create_task(self._run_transcription())
         logger.info("Transcription service started")
 
     async def _run_transcription(self) -> None:
-        """Run transcription in background."""
-        try:
-            await self._transcribe_manager.start()
-        except Exception as e:
-            logger.error(f"Transcription error: {e}")
+        """Run transcription in background with error recovery."""
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries and self._is_running:
+            try:
+                await self._transcribe_manager.start()
+                break  # Normal exit
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"Transcription error (attempt {retry_count}/{max_retries}): {e}")
+                if retry_count < max_retries and self._is_running:
+                    logger.info("Restarting transcription in 5 seconds...")
+                    await asyncio.sleep(5)
+                    # Recreate transcribe manager for fresh connection
+                    if self._transcribe_manager:
+                        try:
+                            await self._transcribe_manager.stop()
+                        except Exception:
+                            pass
+                        self._transcribe_manager = TranscribeStreamingManager(
+                            self._transcribe_manager._session_id
+                        )
+        
+        if retry_count >= max_retries:
+            logger.error("Transcription failed after max retries, continuing without transcription")
 
     async def _login_gmail(self, page) -> None:
         """Login to Gmail account."""
@@ -533,6 +614,15 @@ class MeetingOrchestrator:
         """Keep session alive while meeting is ongoing."""
         logger.info(f"Starting keep-alive loop (interval: {KEEP_ALIVE_INTERVAL}s)")
 
+        # Initial delay to let meeting UI stabilize after join
+        # This prevents false positive detection of "Return to home screen" during page transition
+        logger.info("Waiting 10 seconds for meeting UI to stabilize...")
+        await asyncio.sleep(10)
+
+        heartbeat_counter = 0
+        meeting_ended_count = 0  # Track consecutive "meeting ended" detections
+        MEETING_ENDED_THRESHOLD = 2  # Require 2 consecutive detections before exiting
+        
         while self._is_running:
             try:
                 if await self._check_stop_signal(session_id):
@@ -542,8 +632,36 @@ class MeetingOrchestrator:
                 is_in_meeting = await self._check_meeting_status(page)
 
                 if not is_in_meeting:
-                    logger.warning("No longer in meeting, stopping")
-                    break
+                    meeting_ended_count += 1
+                    logger.warning(f"Meeting ended indicator detected ({meeting_ended_count}/{MEETING_ENDED_THRESHOLD})")
+                    
+                    if meeting_ended_count >= MEETING_ENDED_THRESHOLD:
+                        logger.warning("Meeting ended confirmed after multiple checks, stopping")
+                        break
+                    else:
+                        # Wait a bit and check again to confirm
+                        await asyncio.sleep(3)
+                        continue
+                else:
+                    # Reset counter if we're back in meeting
+                    meeting_ended_count = 0
+
+                # Update session heartbeat every 3 intervals (~90 seconds)
+                heartbeat_counter += 1
+                if heartbeat_counter >= 3:
+                    heartbeat_counter = 0
+                    try:
+                        sessions_table.update_item(
+                            Key={"session_id": session_id},
+                            UpdateExpression="SET updated_at = :ua",
+                            ConditionExpression="attribute_exists(session_id)",
+                            ExpressionAttributeValues={
+                                ":ua": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                        logger.debug(f"Session {session_id} heartbeat updated")
+                    except Exception as e:
+                        logger.warning(f"Failed to update session heartbeat: {e}")
 
                 logger.debug("Keep-alive check: Still in meeting")
                 await asyncio.sleep(KEEP_ALIVE_INTERVAL)
@@ -575,27 +693,15 @@ class MeetingOrchestrator:
                 logger.warning(f"URL changed, no longer on Google Meet: {current_url}")
                 return False
 
-            removed_indicators = [
-                'text="You\'ve been removed from the meeting"',
-                'text="The meeting has ended"',
-                'text="You left the meeting"',
-                'text="Return to home screen"',
-                '[data-call-ended="true"]',
-            ]
-
-            for indicator in removed_indicators:
-                try:
-                    if await page.locator(indicator).count() > 0:
-                        logger.warning(f"Meeting ended indicator found: {indicator}")
-                        return False
-                except Exception:
-                    pass
-
+            # First, check for positive meeting indicators (more reliable)
             meeting_indicators = [
                 "[data-meeting-title]",
                 '[aria-label*="Leave call"]',
+                '[aria-label*="Tinggalkan panggilan"]',
                 '[aria-label*="Turn off camera"]',
                 '[aria-label*="Turn off microphone"]',
+                '[aria-label*="Matikan kamera"]',
+                '[aria-label*="Matikan mikrofon"]',
             ]
 
             for indicator in meeting_indicators:
@@ -607,6 +713,49 @@ class MeetingOrchestrator:
                 except Exception:
                     pass
 
+            # Only check for removed indicators if no positive indicators found
+            removed_indicators = [
+                'text="You\'ve been removed from the meeting"',
+                'text="Anda telah dikeluarkan dari rapat"',
+                'text="The meeting has ended"',
+                'text="Rapat telah berakhir"',
+                'text="You left the meeting"',
+                'text="Anda keluar dari rapat"',
+                '[data-call-ended="true"]',
+            ]
+            
+            # "Return to home screen" is checked separately with extra caution
+            # because it can appear briefly during page transitions
+            return_home_selectors = [
+                'text="Return to home screen"',
+                'text="Kembali ke layar utama"',
+            ]
+
+            for indicator in removed_indicators:
+                try:
+                    if await page.locator(indicator).count() > 0:
+                        logger.warning(f"Meeting ended indicator found: {indicator}")
+                        return False
+                except Exception:
+                    pass
+
+            # Check "Return to home screen" - this needs extra verification
+            for selector in return_home_selectors:
+                try:
+                    if await page.locator(selector).count() > 0:
+                        # Double-check by waiting a moment and checking again
+                        logger.debug(f"Return to home screen detected, verifying...")
+                        await asyncio.sleep(2)
+                        if await page.locator(selector).count() > 0:
+                            logger.warning(f"Meeting ended indicator confirmed: {selector}")
+                            return False
+                        else:
+                            logger.debug("Return to home screen was transient, ignoring")
+                except Exception:
+                    pass
+
+            # No positive indicators but also no negative indicators
+            # This could be a loading state, assume still in meeting
             logger.debug("No meeting indicators found, assuming still in meeting")
             return True
 
@@ -616,7 +765,23 @@ class MeetingOrchestrator:
 
 
 async def poll_sqs_for_meetings(orchestrator: MeetingOrchestrator, pool_manager: BotPoolManager, credential_id: str) -> None:
-    """Poll SQS for meeting requests (warm pool mode)."""
+    """
+    Poll SQS for meeting requests (warm pool mode).
+    
+    IMPORTANT - SQS Message Routing:
+    Multiple warm pool containers (each tied to a different bot credential) poll the same
+    SQS queue. When a container receives a message meant for a different credential, it MUST
+    release the message back to the queue immediately using change_message_visibility with
+    VisibilityTimeout=0. Otherwise, the message stays invisible (locked by SQS visibility
+    timeout) until the timeout expires, during which no other container can pick it up.
+    
+    Without this fix, messages could get grabbed and held repeatedly by wrong containers,
+    making the bot appear permanently stuck.
+    
+    Recommendation: Clean up stale bot pool containers and credentials from test environments.
+    Each active credential with warm_pool_size >= 1 spawns a container that polls the shared
+    queue, so orphaned credentials waste resources and increase message contention.
+    """
     logger.info(f"Starting SQS polling for credential: {credential_id}")
 
     while True:

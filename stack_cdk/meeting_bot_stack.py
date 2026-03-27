@@ -205,6 +205,7 @@ class MeetingBotStack(Stack):
                     "sqs:ReceiveMessage",
                     "sqs:DeleteMessage",
                     "sqs:GetQueueAttributes",
+                    "sqs:ChangeMessageVisibility",
                 ],
                 resources=[self._meeting_queue.queue_arn],
             )

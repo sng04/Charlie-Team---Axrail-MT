@@ -359,6 +359,16 @@ class DynamoDBStack(Stack):
             point_in_time_recovery=self.env_config.get("point_in_time_recovery", False),
         )
 
+        # Existing GSI in AWS - keep for now
+        self.skills_table.add_global_secondary_index(
+            index_name="agent-index",
+            partition_key=dynamodb.Attribute(
+                name="agent_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
         self.skills_table.add_global_secondary_index(
             index_name="name-index",
             partition_key=dynamodb.Attribute(
