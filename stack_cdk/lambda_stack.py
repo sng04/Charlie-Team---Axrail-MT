@@ -30,7 +30,6 @@ class LambdaStack(Stack):
         dynamodb_stack: DynamoDBStack,
         cognito_stack: CognitoStack,
         meeting_bot_stack: MeetingBotStack,
-        ses_sender_email: str,
         admin_email: str,
         admin_temp_password: str,
         env_config: dict = None,
@@ -43,7 +42,6 @@ class LambdaStack(Stack):
         self.dynamodb_stack = dynamodb_stack
         self.cognito_stack = cognito_stack
         self.meeting_bot_stack = meeting_bot_stack
-        self.ses_sender_email = ses_sender_email
         self.admin_email = admin_email
         self.admin_temp_password = admin_temp_password
 
@@ -51,7 +49,6 @@ class LambdaStack(Stack):
         self._create_lambda_role()
         self._grant_dynamodb_permissions()
         self._grant_cognito_permissions()
-        self._grant_ses_permissions()
         self._grant_ecs_permissions()
         self._grant_sqs_permissions()
         self._grant_secrets_permissions()
@@ -187,19 +184,6 @@ class LambdaStack(Stack):
             )
         )
 
-    def _grant_ses_permissions(self) -> None:
-        """Grant SES permissions for sending verification emails."""
-        self.lambda_role.add_to_policy(
-            iam.PolicyStatement(
-                effect=iam.Effect.ALLOW,
-                actions=[
-                    "ses:SendEmail",
-                    "ses:SendRawEmail",
-                ],
-                resources=[f"arn:aws:ses:{self.region}:{self.account}:identity/*"],
-            )
-        )
-
     def _grant_ecs_permissions(self) -> None:
         """Grant ECS permissions for starting/stopping meeting bot tasks."""
         self.lambda_role.add_to_policy(
@@ -314,7 +298,6 @@ class LambdaStack(Stack):
             "ENVIRONMENT": self.env_name,
             "POWERTOOLS_SERVICE_NAME": "axrail-api",
             "LOG_LEVEL": "INFO",
-            "SES_SENDER_EMAIL": self.ses_sender_email,
             # D2 table names
             "AGENTS_TABLE_NAME": self.dynamodb_stack.agents_table.table_name,
             "PERSONALITIES_TABLE_NAME": self.dynamodb_stack.personalities_table.table_name,

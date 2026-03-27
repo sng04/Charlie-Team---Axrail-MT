@@ -72,7 +72,6 @@ _defaults = {
     "ENVIRONMENT": "test",
     "POWERTOOLS_SERVICE_NAME": "test",
     "LOG_LEVEL": "DEBUG",
-    "SES_SENDER_EMAIL": "test@example.com",
     "ECS_CLUSTER": "test-cluster",
     "EVENT_BUS_NAME": "test-event-bus",
     "AGENT_SKILLS_TABLE_NAME": "test-AgentSkills",

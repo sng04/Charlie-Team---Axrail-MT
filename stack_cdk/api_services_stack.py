@@ -80,6 +80,40 @@ class ApiServicesStack(Stack):
                 allow_headers=["Content-Type", "Authorization"],
             ),
         )
+        
+        # Add CORS headers to Gateway Responses for error cases
+        self.api.add_gateway_response(
+            "Unauthorized",
+            type=apigw.ResponseType.UNAUTHORIZED,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
+        self.api.add_gateway_response(
+            "AccessDenied",
+            type=apigw.ResponseType.ACCESS_DENIED,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
+        self.api.add_gateway_response(
+            "Default4xx",
+            type=apigw.ResponseType.DEFAULT_4_XX,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
+        self.api.add_gateway_response(
+            "Default5xx",
+            type=apigw.ResponseType.DEFAULT_5_XX,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
 
         # Add CORS headers to Gateway Responses for error cases
         self.api.add_gateway_response(
@@ -198,7 +232,7 @@ class ApiServicesStack(Stack):
         )
         
         users_resource = self.api.root.add_resource("users")
-
+        
         # GET /users - List all users (admin only)
         users_resource.add_method(
             "GET",
@@ -206,7 +240,7 @@ class ApiServicesStack(Stack):
             authorizer=self.admin_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
-
+        
         # POST /users - Create user (admin only)
         users_resource.add_method(
             "POST",
@@ -235,6 +269,32 @@ class ApiServicesStack(Stack):
 
         # DELETE /users/{userId} - Delete user (admin only)
         user_id_resource.add_method(
+            "DELETE",
+            apigw.LambdaIntegration(self.lambda_stack.delete_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+        
+        user_resource = users_resource.add_resource("{userId}")
+        
+        # GET /users/{userId} - Get single user (admin only)
+        user_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.get_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+        
+        # PUT /users/{userId} - Update user (admin only)
+        user_resource.add_method(
+            "PUT",
+            apigw.LambdaIntegration(self.lambda_stack.update_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+        
+        # DELETE /users/{userId} - Delete user (admin only)
+        user_resource.add_method(
             "DELETE",
             apigw.LambdaIntegration(self.lambda_stack.delete_user_fn),
             authorizer=self.admin_authorizer,
