@@ -20,8 +20,8 @@ class TestDynamoDBStack:
         stack = DynamoDBStack(app, "TestDynamoDBStack", env_name="dev")
         self.template = assertions.Template.from_stack(stack)
 
-    def test_twelve_tables_created(self):
-        self.template.resource_count_is("AWS::DynamoDB::Table", 12)
+    def test_fourteen_tables_created(self):
+        self.template.resource_count_is("AWS::DynamoDB::Table", 14)
 
     def test_opensearch_domain_created(self):
         self.template.resource_count_is("AWS::OpenSearchService::Domain", 1)
@@ -43,13 +43,13 @@ class TestDynamoDBStack:
             {"TableName": "dev-Agents"},
         )
 
-    def test_skills_table_has_agent_index(self):
+    def test_skills_table_has_name_index(self):
         self.template.has_resource_properties(
             "AWS::DynamoDB::Table",
             assertions.Match.object_like({
                 "TableName": "dev-Skills",
                 "GlobalSecondaryIndexes": assertions.Match.array_with([
-                    assertions.Match.object_like({"IndexName": "agent-index"})
+                    assertions.Match.object_like({"IndexName": "name-index"})
                 ]),
             }),
         )

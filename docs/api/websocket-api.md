@@ -155,7 +155,14 @@ Suggested questions from the analysis are automatically stored with embeddings f
 
 ### endMeeting
 
-Generate a meeting summary, save it to S3, and mark the session as inactive.
+Generate a structured 4-chapter meeting summary, save it to S3, and mark the session as inactive.
+
+The agent retrieves the session transcript, QA pairs, and gap analysis results, then produces a markdown summary with exactly four chapters:
+
+1. **Meeting Summary** — Participants, date (ISO 8601), key topics, and decisions
+2. **Missed Agenda Items** — Gaps identified by gap analysis that were never addressed in the meeting. If no gap analysis was run, notes that no gap analysis was performed.
+3. **Action Items / Next Steps** — Concrete items with owners, deadlines, and follow-up commitments
+4. **Session Insights** — Patterns, communication effectiveness, notable moments, and recommendations
 
 Request:
 
@@ -176,11 +183,11 @@ Responses (two messages):
 {
   "type": "meetingSummary",
   "session_id": "abc123",
-  "summary_markdown": "# Meeting Summary\n\n## Date\n2025-01-15..."
+  "summary_markdown": "## Meeting Summary\n\n**Participants:** ...\n**Date:** 2025-01-15\n...\n\n## Missed Agenda Items\n\n...\n\n## Action Items / Next Steps\n\n...\n\n## Session Insights\n\n..."
 }
 ```
 
-The summary is saved to S3 at `{project_id}/summaries/{session_id}.md` and automatically ingested into the knowledge base via the Ingestion Lambda.
+The summary uses `##` level headings for each chapter. It is saved to S3 at `{project_id}/summaries/{session_id}.md` and automatically ingested into the knowledge base via the Ingestion Lambda.
 
 ---
 
@@ -268,9 +275,9 @@ Each question is embedded using Titan Embed Text V2 (1024 dimensions) and stored
 
 ### processTranscript
 
-Process live transcript lines with speaker classification, question matching, client question detection, and answer/response window management.
+Process live transcript lines with question matching, question detection, and answer/response window management.
 
-This is the most complex action — it orchestrates three stages of live QA detection.
+This is the most complex action — it orchestrates three stages of live QA detection. All non-partial lines are processed uniformly without speaker classification.
 
 Request:
 
@@ -280,35 +287,35 @@ Request:
   "session_id": "abc123",
   "lines": [
     {
-      "speaker": "Alice",
+      "speaker": "spk_0",
       "text": "What is the pricing model for the enterprise tier?",
-      "timestamp": "2025-01-15T10:00:00Z"
+      "start_time": "559.25",
+      "end_time": "564.03",
+      "confidence": "0.853",
+      "is_partial": false
     },
     {
-      "speaker": "Bob",
+      "speaker": "spk_0",
       "text": "Our enterprise tier starts at two hundred dollars per seat.",
-      "timestamp": "2025-01-15T10:00:05Z"
+      "start_time": "565.10",
+      "end_time": "570.44",
+      "confidence": "0.912",
+      "is_partial": false
     }
-  ],
-  "speaker_hint": {
-    "Alice": "user",
-    "Bob": "client"
-  }
+  ]
 }
 ```
 
 Fields:
-- `lines` (required) — Array of transcript lines with `speaker`, `text`, and optional `timestamp`
-- `speaker_hint` (optional) — Map of speaker names to roles (`"user"` or `"client"`). If omitted, the agent uses Nova Pro to classify speakers from context. Speaker hints should be provided on every call since role maps are not persisted across Lambda invocations.
+- `lines` (required) — Array of transcript lines with `speaker`, `text`, `start_time`, `end_time`, `confidence`, and `is_partial`
+- `speaker_hint` (deprecated) — Still accepted for backward compatibility but ignored. Speaker classification is no longer performed.
 
 Response (always sent):
 
 ```json
 {
   "type": "transcriptProcessed",
-  "lines_processed": 2,
-  "speaker_role_map": { "Alice": "user", "Bob": "client" },
-  "classification_confidence": "high"
+  "lines_processed": 2
 }
 ```
 
@@ -316,7 +323,7 @@ Additional messages may be sent depending on what the transcript triggers:
 
 #### Stage 1: Question Matching
 
-When a user-role speaker says something semantically similar to a stored suggested question (cosine similarity >= 0.80), a match is reported and an answer window opens:
+When any non-partial line is semantically similar to a stored suggested question (cosine similarity >= 0.80), a match is reported and an answer window opens:
 
 ```json
 {
@@ -329,9 +336,9 @@ When a user-role speaker says something semantically similar to a stored suggest
 
 #### Stage 2: Answer Window Capture
 
-After a question is matched, subsequent client-role lines are captured in an answer window. The window closes when:
-- 5 client lines are collected, OR
-- The user speaks again (turn change), OR
+After a question is matched, subsequent lines are captured in an answer window. The window closes when:
+- 5 lines are collected, OR
+- A new question is detected in an incoming line, OR
 - 60 seconds elapse
 
 On close, the QA pair is auto-saved:
@@ -345,7 +352,7 @@ On close, the QA pair is auto-saved:
 }
 ```
 
-If the window closes with no client lines:
+If the window closes with no collected lines:
 
 ```json
 {
@@ -354,15 +361,15 @@ If the window closes with no client lines:
 }
 ```
 
-#### Stage 3: Client Question Detection
+#### Stage 3: Question Detection
 
-When a client-role speaker asks a question (detected via heuristics or Nova Pro model classification), three things happen:
+When any non-partial line contains a question (detected via heuristics or Nova Pro model classification), three things happen:
 
 1. The question is reported:
 
 ```json
 {
-  "type": "clientQuestionDetected",
+  "type": "questionDetected",
   "question": "What security certifications does your platform have?",
   "detection_method": "heuristic"
 }
@@ -378,7 +385,7 @@ When a client-role speaker asks a question (detected via heuristics or Nova Pro 
 }
 ```
 
-3. A user response window opens to capture the host's verbal answer. It follows the same close rules as answer windows (5 lines / turn change / 60s timeout) and auto-saves with `source: "client"`.
+3. A response window opens to capture the verbal answer that follows. It follows the same close rules as answer windows (5 lines / new question detected / 60s timeout) and auto-saves with `source: "participant"`.
 
 Detection methods:
 - `"heuristic"` — Text ends with `?` or starts with an interrogative word (what, how, why, etc.)
@@ -399,6 +406,7 @@ The StrandsAgent has access to the following tools during WebSocket interactions
 | `get_session_transcript` | sendMessage, detectQuestion, analyzeGaps, endMeeting, retroAnalysis, retroChat | Retrieve transcript entries for a session |
 | `save_qa_pair` | extractQAPair | Persist a question-answer pair to DynamoDB |
 | `get_session_qa_pairs` | endMeeting, retroAnalysis | Retrieve QA pairs recorded during a session |
+| `get_session_gaps` | endMeeting | Retrieve stored gap analysis results for a session |
 | `save_summary_to_s3` | endMeeting | Save meeting summary markdown to S3 |
 | `get_meeting_summary` | retroAnalysis | Retrieve a previously saved meeting summary |
 

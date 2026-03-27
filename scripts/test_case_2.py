@@ -240,7 +240,7 @@ def test_02_create_agent_and_personality(token: str) -> tuple:
     _print_header("TEST 2: Create Agent & Personality")
     try:
         personality_resp = _api("POST", "/personalities", token, {
-            "personality_name": "Consulting Professional",
+            "personality_name": f"Consulting Professional-{uuid.uuid4().hex[:8]}",
             "personality_prompt": (
                 "Use formal, structured language appropriate for enterprise "
                 "consulting. Reference specific regulations and standards by name. "
@@ -251,7 +251,7 @@ def test_02_create_agent_and_personality(token: str) -> tuple:
         personality_id = personality_resp.get("data", {}).get("personality_id", "")
 
         agent_resp = _api("POST", "/agents", token, {
-            "agent_name": "GreenBuild Consulting Agent",
+            "agent_name": f"GreenBuild Consulting Agent-{uuid.uuid4().hex[:8]}",
             "role_prompt": (
                 "You are an AI assistant for GreenBuild carbon reporting consultants. "
                 "You help answer client questions during kickoff and status meetings "
@@ -294,12 +294,18 @@ def test_03_skill_ingestion(token: str, agent_id: str) -> None:
             filepath = os.path.join(skills_dir, filename)
 
             skill_resp = _api("POST", "/skills", token, {
-                "agent_id": agent_id,
                 "skill_name": filename.replace(".md", "").replace("-", " ").title(),
                 "description": f"Skill document: {filename}",
                 "file_name": filename,
             })
             _print_result(f"Create skill ({filename})", skill_resp)
+
+            skill_id = skill_resp.get("data", {}).get("skill", {}).get("skill_id", "")
+
+            # Assign skill to agent
+            if skill_id:
+                assign_resp = _api("POST", f"/agents/{agent_id}/skills/{skill_id}", token)
+                _print_result(f"Assign skill to agent ({filename})", assign_resp)
 
             upload_url = skill_resp.get("data", {}).get("upload_url", "")
             if not upload_url:
@@ -356,11 +362,14 @@ def test_04_create_session_and_load_transcript(token: str, project_id: str) -> s
             for line in transcript_lines:
                 batch.put_item(Item={
                     "session_id": session_id,
-                    "timestamp": line["timestamp"],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "transcript_id": str(uuid.uuid4()),
                     "speaker": line["speaker"],
                     "text": line["text"],
-                    "confidence": "0.95",
+                    "start_time": str(line["start_time"]),
+                    "end_time": str(line["end_time"]),
+                    "confidence": str(line["confidence"]),
+                    "is_partial": line.get("is_partial", False),
                 })
         print(f"  Loaded {len(transcript_lines)} transcript entries for session {session_id}")
 
@@ -385,15 +394,14 @@ def test_04_create_session_and_load_transcript(token: str, project_id: str) -> s
 
 
 def test_05_websocket_process_transcript(session_id: str, agent_id: str) -> None:
-    """Speaker classification — Priya (consultant/user) vs David (client)."""
-    _print_header("TEST 5: processTranscript — Speaker Classification")
+    """Transcript processing — verify lines are processed."""
+    _print_header("TEST 5: processTranscript — Transcript Processing")
     try:
         transcript_path = os.path.join(FIXTURES_DIR, "transcripts", "consulting-kickoff-session.json")
         with open(transcript_path) as f:
             all_lines = json.load(f)
 
-        first_batch = [{"speaker": l["speaker"], "text": l["text"],
-                         "timestamp": l["timestamp"]} for l in all_lines[:4]]
+        first_batch = all_lines[:4]
 
         ws_url = f"{WS_API_URL}?session_id={session_id}&agent_id={agent_id}"
         print(f"  Connecting to {ws_url[:80]}...")
@@ -406,29 +414,28 @@ def test_05_websocket_process_transcript(session_id: str, agent_id: str) -> None
                 "lines": first_batch,
             }, wait_seconds=20)
             _print_result("processTranscript response", messages)
-            print("  Expected: Priya Sharma=user, David Park=client")
-            _record("TEST 5: processTranscript — Speaker Classification", "PASS", {"messages": messages})
+            _record("TEST 5: processTranscript — Transcript Processing", "PASS", {"messages": messages})
         finally:
             ws.close()
     except Exception as e:
-        _record("TEST 5: processTranscript — Speaker Classification", "FAIL", error=traceback.format_exc())
+        _record("TEST 5: processTranscript — Transcript Processing", "FAIL", error=traceback.format_exc())
         raise
 
 
 def test_06_websocket_question_detection(session_id: str, agent_id: str) -> None:
-    """Client question detection — David's questions about process, data, CBAM, offsets."""
-    _print_header("TEST 6: processTranscript — Client Question Detection")
+    """Question detection — David's questions about process, data, CBAM, offsets."""
+    _print_header("TEST 6: processTranscript — Question Detection")
     try:
         question_lines = [
-            {"speaker": "David Park",
+            {"speaker": "spk_0",
              "text": "How exactly does the process work? We've never done a formal carbon inventory before.",
-             "timestamp": "2026-03-18T09:02:35Z"},
-            {"speaker": "David Park",
+             "start_time": 97.30, "end_time": 103.85, "confidence": 0.956, "is_partial": False},
+            {"speaker": "spk_0",
              "text": "Does that affect us?",
-             "timestamp": "2026-03-18T09:07:18Z"},
-            {"speaker": "David Park",
-             "text": "Can you help us evaluate offset options? Like, do you have partnerships with offset providers?",
-             "timestamp": "2026-03-18T09:09:48Z"},
+             "start_time": 264.80, "end_time": 277.45, "confidence": 0.876, "is_partial": False},
+            {"speaker": "spk_0",
+             "text": "Can you help us evaluate offset options? Like do you have partnerships with offset providers?",
+             "start_time": 363.40, "end_time": 372.67, "confidence": 0.926, "is_partial": False},
         ]
 
         ws_url = f"{WS_API_URL}?session_id={session_id}&agent_id={agent_id}"
@@ -438,13 +445,12 @@ def test_06_websocket_question_detection(session_id: str, agent_id: str) -> None
                 "action": "processTranscript",
                 "session_id": session_id,
                 "lines": question_lines,
-                "speaker_hint": {"Priya Sharma": "user", "David Park": "client"},
             }, wait_seconds=25)
 
             for msg in messages:
                 _print_result(f"Response ({msg.get('type', 'unknown')})", msg)
 
-            print("  Expected: clientQuestionDetected for each question")
+            print("  Expected: questionDetected for each question")
             print("  Process Q → GHG Protocol, 4 phases, 10-13 weeks")
             print("  CBAM Q → covers steel/aluminum, add-on $15K/product line")
             print("  Offsets Q → should indicate LIMITED/NO KB coverage (gap!)")
@@ -567,18 +573,17 @@ def test_10_websocket_set_suggested_questions(session_id: str, agent_id: str) ->
             _print_result("setSuggestedQuestions response", set_messages)
 
             match_lines = [
-                {"speaker": "Priya Sharma",
-                 "text": "We follow the GHG Protocol Corporate Standard — it's the gold standard for carbon accounting. The process has four phases over about 10 to 13 weeks.",
-                 "timestamp": "2026-03-18T09:03:05Z"},
-                {"speaker": "Priya Sharma",
+                {"speaker": "spk_0",
+                 "text": "We follow the GHG Protocol Corporate Standard which is the frame work the SEC and most global regulators recognize. There are four phases discovery data collection analysis and reporting.",
+                 "start_time": 105.60, "end_time": 122.40, "confidence": 0.924, "is_partial": False},
+                {"speaker": "spk_0",
                  "text": "The SEC's climate disclosure rules require large accelerated filers to report starting fiscal year 2025, with accelerated filers in 2026.",
-                 "timestamp": "2026-03-18T09:02:15Z"},
+                 "start_time": 401.20, "end_time": 422.78, "confidence": 0.879, "is_partial": False},
             ]
             match_messages = _ws_send_and_receive(ws, {
                 "action": "processTranscript",
                 "session_id": session_id,
                 "lines": match_lines,
-                "speaker_hint": {"Priya Sharma": "user", "David Park": "client"},
             }, wait_seconds=25)
             for msg in match_messages:
                 _print_result(f"Response ({msg.get('type', 'unknown')})", msg)
@@ -724,7 +729,7 @@ def test_15_crud_cleanup(token: str) -> None:
 def _create_project(token: str) -> str:
     """Create the test project and return its project_id."""
     project_resp = _api("POST", "/projects", token, {
-        "name": "GreenBuild - Meridian Manufacturing",
+        "name": f"GreenBuild - Meridian Manufacturing-{uuid.uuid4().hex[:8]}",
         "email": "priya@greenbuild.com",
         "description": "Carbon reporting engagement for Meridian Manufacturing",
     })

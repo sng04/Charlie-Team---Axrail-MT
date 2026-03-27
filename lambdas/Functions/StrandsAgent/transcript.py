@@ -10,7 +10,7 @@ from strands.models.bedrock import BedrockModel
 
 from constants import BEDROCK_REGION, MATCH_THRESHOLD, SESSIONS_TABLE_NAME, TRANSCRIPTS_TABLE_NAME
 from helpers import _get_conn_data, _get_dynamodb, _post_to_connection
-from question_detection import _detect_client_question, _generate_suggested_response
+from question_detection import _detect_question, _generate_suggested_response
 from tools import _generate_embedding
 from windows import (
     _check_answer_windows,
@@ -117,7 +117,7 @@ def _update_session_transcript_ts(session_id: str) -> None:
 
 
 def _handle_process_transcript(body: dict, connection_id: str) -> dict:
-    """Handle processTranscript action — classify speakers, store, match, buffer."""
+    """Handle processTranscript action — store, match, buffer (no speaker classification)."""
     lines = body.get("lines", [])
     if not lines:
         _post_to_connection(connection_id, {
@@ -130,21 +130,7 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
 
-    # --- Speaker classification ---
-    speaker_hint = body.get("speaker_hint")
-    role_map = conn_data.get("speaker_role_map", {})
-    classification_confidence = "high"
-
-    if speaker_hint and isinstance(speaker_hint, dict):
-        role_map.update(speaker_hint)
-    elif not role_map:
-        role_map, classification_confidence = _classify_speakers(
-            lines, conn_data
-        )
-
-    conn_data["speaker_role_map"] = role_map
-
-    # --- Build classified entries ---
+    # --- Build entries (no speaker classification) ---
     entries = []
     for line in lines:
         speaker = line.get("speaker", "Unknown")
@@ -155,9 +141,12 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
             "transcript_id": str(uuid.uuid4()),
             "session_id": session_id,
             "speaker": speaker,
-            "speaker_role": role_map.get(speaker, "unknown"),
             "text": line.get("text", ""),
             "timestamp": timestamp,
+            "start_time": line.get("start_time", ""),
+            "end_time": line.get("end_time", ""),
+            "confidence": line.get("confidence", ""),
+            "is_partial": line.get("is_partial", False),
         })
 
     # --- Batch write to TranscriptsTable ---
@@ -166,61 +155,86 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
     # --- Update session timestamp ---
     _update_session_transcript_ts(session_id)
 
-    # --- Question matching, answer windows & client question detection per line ---
+    # --- Question matching, answer windows & question detection per line ---
     for entry in entries:
-        # Stage 2: Check active answer windows (client responding to matched question)
+        # Skip partial lines entirely
+        if entry.get("is_partial", False):
+            continue
+
+        # Run question detection first (to get is_new_question flag)
+        is_question_detected = False
+        detection_method = ""
+        try:
+            is_question_detected, detection_method = _detect_question(entry["text"])
+        except Exception:
+            logger.exception("Question detection failed for line")
+
+        # Run question matching (to get is_question_matched flag)
+        is_question_matched = False
+        matched_question = None
+        try:
+            user_embedding = _generate_embedding(entry["text"])
+            unmatched = _get_unmatched_questions(session_id)
+            for q in unmatched:
+                q_embedding = q.get("embedding", [])
+                if not q_embedding:
+                    continue
+                # DynamoDB stores numbers as Decimal — convert to float
+                q_embedding = [float(v) for v in q_embedding]
+                sim = _cosine_similarity(user_embedding, q_embedding)
+                if sim >= MATCH_THRESHOLD:
+                    is_question_matched = True
+                    matched_question = (q, sim)
+                    break  # One match per line
+        except Exception:
+            logger.exception("Question matching failed for line")
+
+        # Determine is_new_question for window close decisions
+        is_new_question = is_question_detected or is_question_matched
+
+        # Check active answer windows (append line, check close conditions)
         _check_answer_windows(
-            conn_data, entry, connection_id, session_id, project_id
+            conn_data, entry, connection_id, session_id, project_id,
+            is_new_question=is_new_question,
         )
 
-        # Stage 3: Check user response windows (user responding to client question)
+        # Check user response windows (append line, check close conditions)
         _check_user_response_windows(
-            conn_data, entry, connection_id, session_id, project_id
+            conn_data, entry, connection_id, session_id, project_id,
+            is_new_question=is_new_question,
         )
 
-        # Stage 2: Match user-spoken lines against suggested questions
-        if entry.get("speaker_role") == "user":
+        # If question detected → send questionDetected, generate suggested response, open response window
+        if is_question_detected:
             try:
-                user_embedding = _generate_embedding(entry["text"])
-                unmatched = _get_unmatched_questions(session_id)
-                for q in unmatched:
-                    q_embedding = q.get("embedding", [])
-                    if not q_embedding:
-                        continue
-                    # DynamoDB stores numbers as Decimal — convert to float
-                    q_embedding = [float(v) for v in q_embedding]
-                    sim = _cosine_similarity(user_embedding, q_embedding)
-                    if sim >= MATCH_THRESHOLD:
-                        _mark_question_matched(q["question_id"])
-                        _post_to_connection(connection_id, {
-                            "type": "questionMatched",
-                            "question_text": q["question_text"],
-                            "spoken_text": entry["text"],
-                            "similarity": round(sim, 4),
-                        })
-                        _open_answer_window(conn_data, q, entry)
-                        break  # One match per line
+                _post_to_connection(connection_id, {
+                    "type": "questionDetected",
+                    "question": entry["text"],
+                    "detection_method": detection_method,
+                })
+                _generate_suggested_response(
+                    entry["text"], connection_id, conn_data
+                )
+                _open_user_response_window(
+                    conn_data, entry["text"], entry
+                )
             except Exception:
-                logger.exception("Question matching failed for line")
+                logger.exception("Question detection handling failed for line")
 
-        # Stage 3: Client question detection
-        if entry.get("speaker_role") == "client":
+        # If question matched → send questionMatched, open answer window
+        if is_question_matched and matched_question:
             try:
-                is_question, method = _detect_client_question(entry["text"])
-                if is_question:
-                    _post_to_connection(connection_id, {
-                        "type": "clientQuestionDetected",
-                        "question": entry["text"],
-                        "detection_method": method,
-                    })
-                    _generate_suggested_response(
-                        entry["text"], connection_id, conn_data
-                    )
-                    _open_user_response_window(
-                        conn_data, entry["text"], entry
-                    )
+                q, sim = matched_question
+                _mark_question_matched(q["question_id"])
+                _post_to_connection(connection_id, {
+                    "type": "questionMatched",
+                    "question_text": q["question_text"],
+                    "spoken_text": entry["text"],
+                    "similarity": round(sim, 4),
+                })
+                _open_answer_window(conn_data, q, entry)
             except Exception:
-                logger.exception("Client question detection failed for line")
+                logger.exception("Question matching handling failed for line")
 
     # --- Update transcript buffer (rolling 50) ---
     buffer = conn_data.get("transcript_buffer", [])
@@ -230,8 +244,6 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
     _post_to_connection(connection_id, {
         "type": "transcriptProcessed",
         "lines_processed": len(entries),
-        "speaker_role_map": role_map,
-        "classification_confidence": classification_confidence,
     })
 
     return {"statusCode": 200, "body": "OK"}

@@ -29,6 +29,12 @@ This deploys 6 stacks in dependency order:
 5. `AXRAIL-ApiServices-dev` — REST API Gateway + routes
 6. `AXRAIL-BedrockAgent-dev` — Bedrock Agent in us-east-1
 
+## EventBridge Rule: Bot Credential Validation
+
+The Lambda stack deploys an EventBridge rule that triggers the `ValidateBotCredentialWorker` Lambda when a `BotCredentialValidation` event is published (source: `axrail.bot-credentials`). This enables async SMTP validation of bot credentials after creation.
+
+The `ValidateBotCredentialWorker` Lambda requires the `dnspython` package (included in the SharedLayer) for MX record lookups when detecting SMTP servers for custom email domains.
+
 ## Deploy a Single Stack
 
 ```bash

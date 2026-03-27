@@ -76,6 +76,7 @@ class TestPersonalitiesHandler:
     def test_create_personality_success(self):
         mock_personalities = MagicMock()
         mock_agents = MagicMock()
+        mock_personalities.query.return_value = {"Items": []}
 
         handler_mod = _import_handler(mock_personalities, mock_agents)
         try:

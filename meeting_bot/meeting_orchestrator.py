@@ -645,6 +645,12 @@ async def poll_sqs_for_meetings(orchestrator: MeetingOrchestrator, pool_manager:
 
                 if msg_credential_id != credential_id:
                     logger.debug(f"Message for different credential ({msg_credential_id}), skipping")
+                    # Release message back to queue immediately so the correct container can pick it up
+                    sqs_client.change_message_visibility(
+                        QueueUrl=SQS_QUEUE_URL,
+                        ReceiptHandle=receipt_handle,
+                        VisibilityTimeout=0,
+                    )
                     continue
 
                 session_id = body.get("session_id")

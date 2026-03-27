@@ -9,7 +9,7 @@ class DecimalEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def createResponse(status_code: int, message: str, data: dict = None) -> dict:
+def createResponse(status_code: int, message: str, data: dict = None, event: dict = None) -> dict:
     body = {
         "statusCode": status_code,
         "status": status_code < 400,
@@ -18,7 +18,7 @@ def createResponse(status_code: int, message: str, data: dict = None) -> dict:
     
     if data is not None:
         body["data"] = data
-    
+
     return {
         "statusCode": status_code,
         "headers": {

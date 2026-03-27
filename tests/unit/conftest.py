@@ -26,6 +26,10 @@ sys.modules["opensearchpy"] = MagicMock()
 sys.modules["requests_aws4auth"] = MagicMock()
 sys.modules["PyPDF2"] = MagicMock()
 
+# Mock dns.resolver (used by ValidateBotCredentialWorker)
+sys.modules["dns"] = MagicMock()
+sys.modules["dns.resolver"] = MagicMock()
+
 # ---------------------------------------------------------------------------
 # Layer path injection — add SharedLayer so response_utils / custom_exceptions
 # are importable by Lambda code under test.
@@ -69,7 +73,10 @@ _defaults = {
     "POWERTOOLS_SERVICE_NAME": "test",
     "LOG_LEVEL": "DEBUG",
     "ECS_CLUSTER": "test-cluster",
-    "EVENT_BUS_NAME": "default",
+    "EVENT_BUS_NAME": "test-event-bus",
+    "AGENT_SKILLS_TABLE_NAME": "test-AgentSkills",
+    "DYNAMODB_TABLE": "test-Users",
+    "GAP_ANALYSIS_TABLE_NAME": "test-GapAnalysis",
 }
 for k, v in _defaults.items():
     os.environ.setdefault(k, v)

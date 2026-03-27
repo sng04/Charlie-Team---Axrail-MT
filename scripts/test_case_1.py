@@ -245,7 +245,7 @@ def test_02_create_agent_and_personality(token: str) -> tuple:
     _print_header("TEST 2: Create Agent & Personality (CRUD)")
     try:
         personality_resp = _api("POST", "/personalities", token, {
-            "personality_name": "Sales Professional",
+            "personality_name": f"Sales Professional-{uuid.uuid4().hex[:8]}",
             "personality_prompt": (
                 "Use confident, consultative language. Be specific with numbers "
                 "and data. Maintain a friendly but professional tone."
@@ -255,7 +255,7 @@ def test_02_create_agent_and_personality(token: str) -> tuple:
         personality_id = personality_resp.get("data", {}).get("personality_id", "")
 
         agent_resp = _api("POST", "/agents", token, {
-            "agent_name": "NovaPay Sales Agent",
+            "agent_name": f"NovaPay Sales Agent-{uuid.uuid4().hex[:8]}",
             "role_prompt": (
                 "You are an AI assistant for NovaPay sales representatives. "
                 "You help answer client questions during live sales demos using "
@@ -299,12 +299,18 @@ def test_03_skill_ingestion(token: str, agent_id: str) -> None:
             filepath = os.path.join(skills_dir, filename)
 
             skill_resp = _api("POST", "/skills", token, {
-                "agent_id": agent_id,
                 "skill_name": filename.replace(".md", "").replace("-", " ").title(),
                 "description": f"Skill document: {filename}",
                 "file_name": filename,
             })
             _print_result(f"Create skill ({filename})", skill_resp)
+
+            skill_id = skill_resp.get("data", {}).get("skill", {}).get("skill_id", "")
+
+            # Assign skill to agent
+            if skill_id:
+                assign_resp = _api("POST", f"/agents/{agent_id}/skills/{skill_id}", token)
+                _print_result(f"Assign skill to agent ({filename})", assign_resp)
 
             upload_url = skill_resp.get("data", {}).get("upload_url", "")
             if not upload_url:
@@ -390,15 +396,15 @@ def test_04_create_session_and_load_transcript(token: str, project_id: str) -> s
 
 
 def test_05_websocket_process_transcript(session_id: str, agent_id: str) -> None:
-    """Connect via WebSocket and send processTranscript for speaker classification."""
-    _print_header("TEST 5: processTranscript — Speaker Classification")
+    """Transcript processing — verify lines are processed."""
+    _print_header("TEST 5: processTranscript — Transcript Processing")
     try:
         transcript_path = os.path.join(FIXTURES_DIR, "transcripts", "sales-demo-session.json")
         with open(transcript_path) as f:
             all_lines = json.load(f)
 
-        first_batch = [{"speaker": l["speaker"], "text": l["text"],
-                         "timestamp": l["timestamp"]} for l in all_lines[:6]]
+        first_batch = all_lines[:6]
+
 
         ws_url = f"{WS_API_URL}?session_id={session_id}&agent_id={agent_id}"
         print(f"  Connecting to {ws_url[:80]}...")
@@ -411,27 +417,27 @@ def test_05_websocket_process_transcript(session_id: str, agent_id: str) -> None
                 "lines": first_batch,
             }, wait_seconds=20)
             _print_result("processTranscript response", messages)
-            print("  Expected: speaker_role_map with Alex Chen=user, Marcus Webb=client")
-            _record("TEST 5: processTranscript — Speaker Classification", "PASS", {"messages": messages})
+            _record("TEST 5: processTranscript — Transcript Processing", "PASS", {"messages": messages})
         finally:
             ws.close()
     except Exception as e:
-        _record("TEST 5: processTranscript — Speaker Classification", "FAIL", error=traceback.format_exc())
+        _record("TEST 5: processTranscript — Transcript Processing", "FAIL", error=traceback.format_exc())
         raise
 
 
 def test_06_websocket_question_detection(session_id: str, agent_id: str) -> None:
-    """Send transcript lines with client questions to test detection + suggested responses."""
-    _print_header("TEST 6: processTranscript — Client Question Detection")
+    """Send transcript lines with questions to test detection + suggested responses."""
+    _print_header("TEST 6: processTranscript — Question Detection")
     try:
         question_lines = [
-            {"speaker": "Marcus Webb",
+            {"speaker": "spk_0",
              "text": "What does the pricing look like for our volume? We're paying about 2.7% blended right now and I know we can do better.",
-             "timestamp": "2026-03-15T10:03:08Z"},
-            {"speaker": "Marcus Webb",
+             "start_time": 99.80, "end_time": 108.23, "confidence": 0.952, "is_partial": False},
+            {"speaker": "spk_0",
              "text": "Can NovaPay handle multi-currency transactions?",
-             "timestamp": "2026-03-15T10:06:15Z"},
+             "start_time": 202.80, "end_time": 215.33, "confidence": 0.889, "is_partial": False},
         ]
+
 
         ws_url = f"{WS_API_URL}?session_id={session_id}&agent_id={agent_id}"
         ws = websocket.create_connection(ws_url, timeout=10, sslopt=_SSL_OPTS)
@@ -440,13 +446,12 @@ def test_06_websocket_question_detection(session_id: str, agent_id: str) -> None
                 "action": "processTranscript",
                 "session_id": session_id,
                 "lines": question_lines,
-                "speaker_hint": {"Alex Chen": "user", "Marcus Webb": "client"},
             }, wait_seconds=25)
 
             for msg in messages:
                 _print_result(f"Response ({msg.get('type', 'unknown')})", msg)
 
-            print("  Expected: clientQuestionDetected events + suggestedResponse with KB-sourced answers")
+            print("  Expected: questionDetected events + suggestedResponse with KB-sourced answers")
             print("  Pricing Q → should reference interchange-plus, Enterprise tier")
             print("  Multi-currency Q → should state NOT supported, Q3 2026 expansion")
             _record("TEST 6: processTranscript — Question Detection", "PASS", {"messages": messages})
@@ -562,21 +567,20 @@ def test_10_websocket_set_suggested_questions(session_id: str, agent_id: str) ->
             _print_result("setSuggestedQuestions response", set_messages)
 
             match_lines = [
-                {"speaker": "Alex Chen",
+                {"speaker": "spk_0",
                  "text": "For your volume, you'd be on our Enterprise plan — interchange-plus pricing, which means you pay the actual interchange rate plus a small fixed margin.",
-                 "timestamp": "2026-03-15T10:03:35Z"},
-                {"speaker": "Alex Chen",
+                 "start_time": 110.45, "end_time": 125.67, "confidence": 0.938, "is_partial": False},
+                {"speaker": "spk_0",
                  "text": "Multi-currency is on our roadmap — we're expanding to Canada and UK by Q3 2026.",
-                 "timestamp": "2026-03-15T10:06:42Z"},
-                {"speaker": "Alex Chen",
+                 "start_time": 217.50, "end_time": 233.12, "confidence": 0.903, "is_partial": False},
+                {"speaker": "spk_0",
                  "text": "We're PCI DSS Level 1 certified and SOC 2 Type II audited annually.",
-                 "timestamp": "2026-03-15T10:08:18Z"},
+                 "start_time": 274.30, "end_time": 292.55, "confidence": 0.919, "is_partial": False},
             ]
             match_messages = _ws_send_and_receive(ws, {
                 "action": "processTranscript",
                 "session_id": session_id,
                 "lines": match_lines,
-                "speaker_hint": {"Alex Chen": "user", "Marcus Webb": "client"},
             }, wait_seconds=25)
             for msg in match_messages:
                 _print_result(f"Response ({msg.get('type', 'unknown')})", msg)
@@ -703,7 +707,7 @@ def test_15_crud_cleanup(token: str) -> None:
 def _create_project(token: str) -> str:
     """Create the test project and return its project_id."""
     project_resp = _api("POST", "/projects", token, {
-        "name": "NovaPay - FreshCart Demo",
+        "name": f"NovaPay - FreshCart Demo-{uuid.uuid4().hex[:8]}",
         "email": "alex@novapay.com",
         "description": "Sales demo for FreshCart retail chain",
     })

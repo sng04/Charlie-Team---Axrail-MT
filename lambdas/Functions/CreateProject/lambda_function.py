@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 
 from aws_lambda_powertools import Logger, Tracer
 import boto3
+from boto3.dynamodb.conditions import Attr, Key
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError
@@ -40,6 +41,14 @@ def lambda_handler(event, context):
     try:
         data = _parse_body(event)
         _validate_input(data)
+
+        # Check for duplicate name via GSI query
+        existing = table.query(
+            IndexName="name-index",
+            KeyConditionExpression=Key("name").eq(data["name"]),
+        )
+        if existing.get("Items"):
+            return createResponse(409, "A project with this name already exists")
         
         project_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()

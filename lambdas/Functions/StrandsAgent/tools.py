@@ -22,6 +22,7 @@ TRANSCRIPTS_TABLE_NAME = os.environ.get("TRANSCRIPTS_TABLE_NAME", "")
 QA_PAIRS_TABLE_NAME = os.environ.get("QA_PAIRS_TABLE_NAME", "")
 KB_BUCKET_NAME = os.environ.get("KB_BUCKET_NAME", "")
 SKILLS_TABLE_NAME = os.environ.get("SKILLS_TABLE_NAME", "")
+GAP_ANALYSIS_TABLE_NAME = os.environ.get("GAP_ANALYSIS_TABLE_NAME", "")
 
 _os_client = None
 _bedrock_client = None
@@ -313,16 +314,20 @@ def get_meeting_summary(session_id: str, project_id: str) -> str:
 
 
 @tool
-def search_agent_skills(query: str, agent_id: str) -> str:
-    """Search skill documents attached to a specific agent.
+def search_agent_skills(query: str, skill_ids: str) -> str:
+    """Search skill documents by skill IDs.
 
     Args:
         query: The search query to find relevant skill content.
-        agent_id: The agent ID to filter skill documents by.
+        skill_ids: Comma-separated list of skill IDs to search within.
 
     Returns:
         Formatted search results from the agent's skill documents.
     """
+    ids_list = [s.strip() for s in skill_ids.split(",") if s.strip()]
+    if not ids_list:
+        return "No skill documents available for this agent."
+
     try:
         embedding = _generate_embedding(query)
         search_body = {
@@ -333,7 +338,7 @@ def search_agent_skills(query: str, agent_id: str) -> str:
                         {"knn": {"embedding": {"vector": embedding, "k": 5}}}
                     ],
                     "filter": [
-                        {"term": {"agent_id": agent_id}},
+                        {"terms": {"skill_id": ids_list}},
                         {"term": {"doc_type": "agent_skill"}},
                     ],
                 }
@@ -357,3 +362,47 @@ def search_agent_skills(query: str, agent_id: str) -> str:
     except Exception as exc:
         logger.exception("Agent skills search failed")
         return f"Error searching agent skills: {exc}"
+
+
+def _get_gap_analysis_table():
+    """Return a cached DynamoDB Table resource for gap analysis results."""
+    global _dynamodb
+    if _dynamodb is None:
+        _dynamodb = boto3.resource("dynamodb")
+    return _dynamodb.Table(GAP_ANALYSIS_TABLE_NAME)
+
+
+@tool
+def get_session_gaps(session_id: str) -> str:
+    """Retrieve stored gap analysis results for a session.
+
+    Args:
+        session_id: The session ID to retrieve gap analysis for.
+
+    Returns:
+        Formatted gap analysis results, or a message if none found.
+    """
+    if not GAP_ANALYSIS_TABLE_NAME:
+        return "Gap analysis table not configured."
+    try:
+        table = _get_gap_analysis_table()
+        response = table.get_item(Key={"session_id": session_id})
+        item = response.get("Item")
+        if not item:
+            return f"No gap analysis results found for session {session_id}."
+
+        gaps = item.get("gaps", [])
+        analyzed_at = item.get("analyzed_at", "unknown")
+        if not gaps:
+            return f"Gap analysis ran at {analyzed_at} but found no knowledge gaps."
+
+        formatted = [f"Gap analysis results (analyzed at {analyzed_at}):"]
+        for i, gap in enumerate(gaps, 1):
+            topic = gap.get("topic", "Unknown")
+            description = gap.get("description", "")
+            confidence = gap.get("confidence", "unknown")
+            formatted.append(f"  {i}. [{confidence}] {topic}: {description}")
+        return "\n".join(formatted)
+    except Exception as exc:
+        logger.exception("Failed to retrieve gap analysis results")
+        return f"Error retrieving gap analysis: {exc}"

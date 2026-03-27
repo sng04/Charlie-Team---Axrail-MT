@@ -306,6 +306,8 @@ class LambdaStack(Stack):
             "SKILLS_TABLE_NAME": self.dynamodb_stack.skills_table.table_name,
             "SESSIONS_TABLE_NAME": self.dynamodb_stack.sessions_table.table_name,
             "TRANSCRIPTS_TABLE_NAME": self.dynamodb_stack.transcripts_table.table_name,
+            "GAP_ANALYSIS_TABLE_NAME": self.dynamodb_stack.gap_analysis_results_table.table_name,
+            "AGENT_SKILLS_TABLE_NAME": self.dynamodb_stack.agent_skills_table.table_name,
         }
 
     def _create_lambda_function(
@@ -449,6 +451,7 @@ class LambdaStack(Stack):
         self.create_bot_credential_fn = self._create_lambda_function(
             "CreateBotCredential", "lambdas/Functions/CreateBotCredential"
         )
+        self.create_bot_credential_fn.add_environment("EVENT_BUS_NAME", "default")
 
         self.list_bot_credentials_fn = self._create_lambda_function(
             "ListBotCredentials", "lambdas/Functions/ListBotCredentials"
@@ -461,6 +464,7 @@ class LambdaStack(Stack):
         self.update_bot_credential_fn = self._create_lambda_function(
             "UpdateBotCredential", "lambdas/Functions/UpdateBotCredential"
         )
+        self.update_bot_credential_fn.add_environment("EVENT_BUS_NAME", "default")
 
         self.delete_bot_credential_fn = self._create_lambda_function(
             "DeleteBotCredential", "lambdas/Functions/DeleteBotCredential"
@@ -497,6 +501,17 @@ class LambdaStack(Stack):
         )
         self.skills_crud_fn = self._create_lambda_function(
             "SkillsCrud", "lambdas/Functions/SkillsCrud"
+        )
+
+        self.agent_skills_crud_fn = self._create_lambda_function(
+            "AgentSkillsCrud", "lambdas/Functions/AgentSkillsCrud"
+        )
+
+        # Test Prompt Lambda (admin only, no persistence)
+        self.test_prompt_fn = self._create_lambda_function(
+            "TestPrompt", "lambdas/Functions/TestPrompt",
+            timeout=60,
+            memory_size=256,
         )
 
         # AI base environment for event-driven Lambdas
@@ -613,6 +628,8 @@ class LambdaStack(Stack):
             self.dynamodb_stack.qa_pairs_table,
             self.dynamodb_stack.suggested_questions_table,
             self.dynamodb_stack.skills_table,
+            self.dynamodb_stack.gap_analysis_results_table,
+            self.dynamodb_stack.agent_skills_table,
         ]:
             table.grant_read_write_data(self.lambda_role)
 
@@ -655,6 +672,20 @@ class LambdaStack(Stack):
         self.skills_bucket = s3.CfnBucket(
             self, "SkillsBucket",
             bucket_name=skills_bucket_name,
+            cors_configuration=s3.CfnBucket.CorsConfigurationProperty(
+                cors_rules=[
+                    s3.CfnBucket.CorsRuleProperty(
+                        allowed_headers=["*"],
+                        allowed_methods=["PUT", "POST", "GET"],
+                        allowed_origins=[
+                            "http://localhost:3000",
+                            "https://d2bed2yjnef4ve.cloudfront.net",
+                        ],
+                        exposed_headers=["ETag"],
+                        max_age=3600,
+                    ),
+                ],
+            ),
             notification_configuration=s3.CfnBucket.NotificationConfigurationProperty(
                 lambda_configurations=[
                     s3.CfnBucket.LambdaConfigurationProperty(
@@ -1210,6 +1241,13 @@ class LambdaStack(Stack):
             "StopWarmPoolFnArn",
             value=self.stop_warm_pool_fn.function_arn,
             export_name=f"AXRAIL-StopWarmPoolFnArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "ListBotPoolFnArn",
+            value=self.list_bot_pool_fn.function_arn,
+            export_name=f"AXRAIL-ListBotPoolFnArn-{self.env_name}",
         )
 
         CfnOutput(

@@ -12,9 +12,9 @@ Decompose the monolith into 7 focused modules within the same Lambda package:
 |---|---|
 | `lambda_function.py` | WebSocket route dispatch only (~80 lines) |
 | `handlers.py` | Action handlers (sendMessage, detectQuestion, etc.) |
-| `transcript.py` | processTranscript logic, speaker classification, question matching |
-| `question_detection.py` | Client question heuristics and model classification |
-| `windows.py` | Answer windows, user response windows, suggested question storage |
+| `transcript.py` | processTranscript logic, question matching, question detection |
+| `question_detection.py` | Question heuristics and model classification |
+| `windows.py` | Answer windows, response windows, suggested question storage |
 | `tools.py` | Strands agent tools (KB search, transcript retrieval, QA save, S3) |
 | `helpers.py` | DynamoDB access, connection cache, WebSocket posting |
 | `constants.py` | Environment variables, thresholds, default configs, task prompts |

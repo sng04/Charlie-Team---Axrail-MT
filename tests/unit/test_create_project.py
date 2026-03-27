@@ -45,6 +45,7 @@ def _env_vars():
 class TestCreateProject:
     def test_create_project_success(self):
         mock_table = MagicMock()
+        mock_table.query.return_value = {"Items": []}
         handler_mod = _import_handler(mock_table)
         try:
             event = {
@@ -74,6 +75,7 @@ class TestCreateProject:
 
     def test_create_project_unexpected_error_returns_500(self):
         mock_table = MagicMock()
+        mock_table.query.return_value = {"Items": []}
         mock_table.put_item.side_effect = Exception("DynamoDB error")
         handler_mod = _import_handler(mock_table)
         try:

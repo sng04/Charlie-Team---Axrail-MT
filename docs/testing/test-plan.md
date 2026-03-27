@@ -9,11 +9,9 @@ This document defines tests for every AI agent function using two test cases. Ea
 | | Test Case 1: NovaPay Sales Demo | Test Case 2: GreenBuild Consulting Kickoff |
 |---|---|---|
 | **Domain** | Fintech / payment processing | Sustainability consulting |
-| **User role** | Sales rep (Alex Chen) | Consultant (Priya Sharma) |
-| **Client role** | Retail chain CTO (Marcus Webb) | Manufacturing VP Ops (David Park) |
 | **KB files** | product-overview, pricing-guide, api-reference, security-compliance | carbon-reporting-methodology, regulatory-landscape, service-tiers-pricing |
 | **Skill files** | competitor-comparison, retail-industry-talking-points | manufacturing-emissions-guide, meridian-client-context |
-| **Transcript** | 33 lines, ~13 min sales demo | 32 lines, ~14 min project kickoff |
+| **Transcript** | 36 lines, single-channel (`spk_0`) | 37 lines, single-channel (`spk_0`) |
 | **KB gap** | Multi-currency / international (not supported) | Carbon offsets / credits (not covered) |
 
 ---
@@ -27,7 +25,7 @@ This document defines tests for every AI agent function using two test cases. Ea
 3. Create a personality via `POST /personalities`
 4. Upload skill files via `POST /skills` → verify SkillIngestion fires
 5. Create a session via `POST /sessions` linked to the project
-6. Load the transcript into the Transcripts table (batch write with `session_id` + `timestamp`)
+6. Load the transcript into the Transcripts table (batch write with `session_id`, `speaker`, `text`, `start_time`, `end_time`, `confidence`)
 7. Connect to the WebSocket with `?session_id={id}&agent_id={id}`
 
 ---
@@ -88,52 +86,53 @@ Skills table record should show `status: "indexed"` after ingestion completes.
 
 ---
 
-## Test 3: processTranscript — Speaker Classification
+## Test 3: processTranscript — Transcript Processing
 
-**Action:** `processTranscript` with first 5-10 transcript lines, no `speaker_hint`
-**Expected:** Agent classifies speakers into `user` and `client` roles
+**Action:** `processTranscript` with first 4-6 transcript lines
+**Expected:** Lines are processed, `transcriptProcessed` response returned with correct line count
 
 ### Test Case 1
 
-**Input lines:** First 6 lines (Alex introduces himself as NovaPay rep, Marcus describes his retail chain)
+**Input lines:** First 6 lines from the sales demo transcript (single-channel, `spk_0`)
 
 **Expected result:**
-- `speaker_role_map`: `{"Alex Chen": "user", "Marcus Webb": "client"}`
-- `classification_confidence`: `"high"` (clear role signals — "I'm Alex from NovaPay")
 - Response type: `transcriptProcessed` with `lines_processed: 6`
+- No `speaker_role_map` or `classification_confidence` in response
 
 ### Test Case 2
 
-**Input lines:** First 4 lines (Priya identifies as consultant, David describes his company)
+**Input lines:** First 4 lines from the consulting kickoff transcript (single-channel, `spk_0`)
 
 **Expected result:**
-- `speaker_role_map`: `{"Priya Sharma": "user", "David Park": "client"}`
-- `classification_confidence`: `"high"`
+- Response type: `transcriptProcessed` with `lines_processed: 4`
+- No `speaker_role_map` or `classification_confidence` in response
 
 ---
 
-## Test 4: processTranscript — Client Question Detection
+## Test 4: processTranscript — Question Detection
 
-**Action:** `processTranscript` with lines containing client questions
+**Action:** `processTranscript` with lines containing questions
 **Expected:** Agent detects questions and generates suggested responses from KB
 
 ### Test Case 1
 
 | Transcript Line | Detection Method | Expected suggestedResponse Topic |
 |---|---|---|
-| `"What does the pricing look like for our volume?"` (Marcus, 10:03:08) | heuristic (ends with `?`) | Should reference interchange-plus pricing, Enterprise tier, volume discounts from `pricing-guide.md` |
-| `"Is that included in the enterprise plan or is it extra?"` (Marcus, 10:05:25) | heuristic | Should reference ShieldAI included on Enterprise, Stripe charges $0.05 extra (from skill: competitor-comparison) |
-| `"Can NovaPay handle multi-currency transactions?"` (Marcus, 10:06:15) | heuristic | Should state multi-currency NOT currently supported, Canada/UK Q3 2026 from `product-overview.md` |
-| `"What kind of uptime guarantees do you offer?"` (Marcus, 10:11:02) | heuristic | Should reference 99.99% SLA, active-active AWS from `security-compliance.md` |
+| `"What does the pricing look like for our volume?"` | heuristic (ends with `?`) | Should reference interchange-plus pricing, Enterprise tier, volume discounts from `pricing-guide.md` |
+| `"Is that included in the enterprise plan or is it extra?"` | heuristic | Should reference ShieldAI included on Enterprise, Stripe charges $0.05 extra (from skill: competitor-comparison) |
+| `"Can NovaPay handle multi-currency transactions?"` | heuristic | Should state multi-currency NOT currently supported, Canada/UK Q3 2026 from `product-overview.md` |
+| `"What kind of uptime guarantees do you offer?"` | heuristic | Should reference 99.99% SLA, active-active AWS from `security-compliance.md` |
 
 ### Test Case 2
 
 | Transcript Line | Detection Method | Expected suggestedResponse Topic |
 |---|---|---|
-| `"How exactly does the process work?"` (David, 09:02:35) | heuristic | Should reference GHG Protocol, 4 phases, 10-13 weeks from `carbon-reporting-methodology.md` |
-| `"What kind of data will you need from us?"` (David, 09:04:05) | heuristic | Should reference utility bills, fleet fuel, production logs from methodology + skill (manufacturing-emissions-guide) |
-| `"Does that affect us?"` (David, about CBAM, 09:07:18) | model (no `?` but interrogative context) | Should reference CBAM covers steel/aluminum, add-on assessment from `regulatory-landscape.md` |
-| `"Can you help us evaluate offset options?"` (David, 09:09:48) | heuristic | Should indicate limited/no KB coverage — this is the gap topic |
+| `"How exactly does the process work?"` | heuristic | Should reference GHG Protocol, 4 phases, 10-13 weeks from `carbon-reporting-methodology.md` |
+| `"What kind of data will you need from us?"` | heuristic | Should reference utility bills, fleet fuel, production logs from methodology + skill (manufacturing-emissions-guide) |
+| `"Does that affect us?"` (about CBAM) | model (no `?` but interrogative context) | Should reference CBAM covers steel/aluminum, add-on assessment from `regulatory-landscape.md` |
+| `"Can you help us evaluate offset options?"` | heuristic | Should indicate limited/no KB coverage — this is the gap topic |
+
+Note: All lines are processed uniformly regardless of speaker. The `questionDetected` message type is used for all detected questions.
 
 ---
 
@@ -225,7 +224,7 @@ Skills table record should show `status: "indexed"` after ingestion completes.
 
 | Section | Key Content |
 |---|---|
-| **Attendees** | Alex Chen (NovaPay), Marcus Webb (FreshCart) |
+| **Attendees** | Alex Chen (NovaPay), Marcus Webb (FreshCart) — identified from conversational context |
 | **Key Discussion Topics** | Unified payment gateway, interchange-plus pricing, ShieldAI fraud detection, multi-currency gap, PCI compliance simplification, integration timeline |
 | **Decisions Made** | Marcus interested in Enterprise plan; will evaluate Canada gap; wants technical review |
 | **Action Items** | Alex: send formal proposal with savings projection, API docs, sandbox credentials, Canada timeline from product team. Marcus: share API docs with CTO. Follow-up Thursday. |
@@ -236,7 +235,7 @@ Skills table record should show `status: "indexed"` after ingestion completes.
 
 | Section | Key Content |
 |---|---|
-| **Attendees** | Priya Sharma (GreenBuild), David Park (Meridian Manufacturing) |
+| **Attendees** | Priya Sharma (GreenBuild), David Park (Meridian Manufacturing) — identified from conversational context |
 | **Key Discussion Topics** | GHG Protocol methodology, data collection requirements, Scope 3 supplier emissions, CBAM exposure, carbon offsets (unresolved), assurance readiness, pricing |
 | **Decisions Made** | Include assurance readiness add-on ($18K); CBAM assessment pending CFO/EU team discussion; April start targeting August board meeting |
 | **Action Items** | Priya: send formal proposal by Friday with breakdown + data request list, include team bios, follow up on offset advisory offering. David: confirm CBAM scope with EU sales team, begin gathering utility bills. |
@@ -305,9 +304,9 @@ Skills table record should show `status: "indexed"` after ingestion completes.
 3. `"What security certifications does NovaPay hold?"`
 
 **Then process transcript.** Expected matches:
-- Question 1 should match when Alex discusses interchange-plus pricing (~10:03:35)
-- Question 2 should match when Alex discusses Canada/UK expansion (~10:06:42)
-- Question 3 should match when Alex discusses PCI DSS and SOC 2 (~10:08:18)
+- Question 1 should match when the pricing discussion occurs (interchange-plus pricing explanation)
+- Question 2 should match when the Canada/UK expansion is discussed
+- Question 3 should match when PCI DSS and SOC 2 certifications are mentioned
 
 ### Test Case 2
 
@@ -316,8 +315,8 @@ Skills table record should show `status: "indexed"` after ingestion completes.
 2. `"What are the regulatory requirements for carbon reporting?"`
 
 **Expected matches:**
-- Question 1 matches when Priya explains GHG Protocol (~09:03:05)
-- Question 2 matches when Priya discusses SEC filing requirements (~09:02:15)
+- Question 1 matches when the GHG Protocol methodology is explained
+- Question 2 matches when SEC filing requirements are discussed
 
 ---
 

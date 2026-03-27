@@ -94,7 +94,7 @@ def _open_answer_window(conn_data: dict, question: dict, trigger_line: dict) -> 
     windows[question["question_id"]] = {
         "question_text": question["question_text"],
         "spoken_text": trigger_line.get("text", ""),
-        "client_lines": [],
+        "collected_lines": [],
         "opened_at": trigger_line.get("timestamp", datetime.now(timezone.utc).isoformat()),
         "max_lines": 5,
         "timeout_seconds": 60,
@@ -117,26 +117,26 @@ def _check_answer_windows(
     connection_id: str,
     session_id: str,
     project_id: str,
+    is_new_question: bool = False,
 ) -> None:
-    """Process active answer windows — append client lines, check close conditions."""
+    """Process active answer windows — append all lines, check close conditions."""
     windows = conn_data.get("answer_windows", {})
     if not windows:
         return
 
     closed = []
     for qid, window in windows.items():
-        if line.get("speaker_role") == "client":
-            window["client_lines"].append(line.get("text", ""))
+        window["collected_lines"].append(line.get("text", ""))
 
         should_close = (
-            len(window["client_lines"]) >= window["max_lines"]
-            or (line.get("speaker_role") == "user" and window["client_lines"])
+            len(window["collected_lines"]) >= window["max_lines"]
+            or (is_new_question and window["collected_lines"])
             or _window_timed_out(window, line.get("timestamp", ""))
         )
 
         if should_close:
-            if window["client_lines"]:
-                answer = " ".join(window["client_lines"])
+            if window["collected_lines"]:
+                answer = " ".join(window["collected_lines"])
                 try:
                     save_qa_pair(
                         question=window["question_text"],
@@ -170,12 +170,12 @@ def _check_answer_windows(
 
 
 def _open_user_response_window(conn_data: dict, question_text: str, trigger_line: dict) -> str:
-    """Open a user response capture window for a detected client question."""
+    """Open a user response capture window for a detected question."""
     windows = conn_data.setdefault("user_response_windows", {})
     window_id = str(uuid.uuid4())
     windows[window_id] = {
         "question_text": question_text,
-        "user_lines": [],
+        "collected_lines": [],
         "opened_at": trigger_line.get("timestamp", datetime.now(timezone.utc).isoformat()),
         "max_lines": 5,
         "timeout_seconds": 60,
@@ -189,26 +189,26 @@ def _check_user_response_windows(
     connection_id: str,
     session_id: str,
     project_id: str,
+    is_new_question: bool = False,
 ) -> None:
-    """Process active user response windows — append user lines, check close conditions."""
+    """Process active user response windows — append all lines, check close conditions."""
     windows = conn_data.get("user_response_windows", {})
     if not windows:
         return
 
     closed = []
     for wid, window in windows.items():
-        if line.get("speaker_role") == "user":
-            window["user_lines"].append(line.get("text", ""))
+        window["collected_lines"].append(line.get("text", ""))
 
         should_close = (
-            len(window["user_lines"]) >= window["max_lines"]
-            or (line.get("speaker_role") == "client" and window["user_lines"])
+            len(window["collected_lines"]) >= window["max_lines"]
+            or (is_new_question and window["collected_lines"])
             or _window_timed_out(window, line.get("timestamp", ""))
         )
 
         if should_close:
-            if window["user_lines"]:
-                answer = " ".join(window["user_lines"])
+            if window["collected_lines"]:
+                answer = " ".join(window["collected_lines"])
                 try:
                     save_qa_pair(
                         question=window["question_text"],

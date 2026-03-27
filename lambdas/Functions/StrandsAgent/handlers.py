@@ -1,6 +1,7 @@
 """Action handlers for WebSocket message routing."""
 
 import json
+from datetime import datetime, timezone
 
 from aws_lambda_powertools import Logger, Tracer
 from strands import Agent
@@ -20,6 +21,7 @@ from helpers import (
 )
 from tools import (
     get_meeting_summary,
+    get_session_gaps,
     get_session_qa_pairs,
     get_session_transcript,
     save_qa_pair,
@@ -78,6 +80,7 @@ def _handle_connect(event) -> dict:
         "session_id": session_id,
         "agent_id": agent_id or "",
         "skills": skills,
+        "skill_ids": [s["skill_id"] for s in skills],
     }
 
     # Only mark session active if it isn't already completed (inactive after
@@ -124,7 +127,7 @@ def _handle_send_message(body: dict, connection_id: str) -> dict:
     session_id = body.get("session_id", "default-session")
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
-    agent_id = conn_data.get("agent_id", "")
+    skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     try:
         model = BedrockModel(
@@ -137,12 +140,11 @@ def _handle_send_message(body: dict, connection_id: str) -> dict:
             tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
         )
         enriched_message = (
-            f"[Context: session_id={session_id}, project_id={project_id}, "
-            f"agent_id={agent_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}]\n"
             f"IMPORTANT: When searching the knowledge base, always use "
             f"project_id='{project_id}' to ensure results are scoped to "
             f"this project only. When searching agent skills, use "
-            f"agent_id='{agent_id}'.\n\n"
+            f"skill_ids='{skill_ids_str}'.\n\n"
             f"{message}"
         )
         result = agent(enriched_message)
@@ -175,7 +177,7 @@ def _handle_detect_question(body: dict, connection_id: str) -> dict:
     session_id = body.get("session_id", "default-session")
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
-    agent_id = conn_data.get("agent_id", "")
+    skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     try:
         model = BedrockModel(
@@ -191,11 +193,10 @@ def _handle_detect_question(body: dict, connection_id: str) -> dict:
             tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
         )
         enriched = (
-            f"[Context: session_id={session_id}, project_id={project_id}, "
-            f"agent_id={agent_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}]\n"
             f"IMPORTANT: When searching the knowledge base, always use "
             f"project_id='{project_id}' to scope results. "
-            f"When searching agent skills, use agent_id='{agent_id}'.\n\n"
+            f"When searching agent skills, use skill_ids='{skill_ids_str}'.\n\n"
             f"Question: {question}"
         )
         result = agent(enriched)
@@ -265,6 +266,26 @@ def _handle_extract_qa_pair(body: dict, connection_id: str) -> dict:
     return {"statusCode": 200, "body": "OK"}
 
 
+def _persist_gap_analysis(session_id: str, analysis: dict) -> None:
+    """Write gap analysis results to GapAnalysisResults table."""
+    from constants import GAP_ANALYSIS_TABLE_NAME
+    from helpers import _get_dynamodb
+
+    if not GAP_ANALYSIS_TABLE_NAME:
+        logger.warning("GAP_ANALYSIS_TABLE_NAME not configured — skipping persistence")
+        return
+    try:
+        table = _get_dynamodb().Table(GAP_ANALYSIS_TABLE_NAME)
+        table.put_item(Item={
+            "session_id": session_id,
+            "gaps": analysis.get("gaps", []),
+            "suggested_questions": analysis.get("suggested_questions", []),
+            "analyzed_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        logger.exception("Failed to persist gap analysis for session %s", session_id)
+
+
 def _handle_analyze_gaps(body: dict, connection_id: str) -> dict:
     """Handle analyzeGaps action — identify knowledge gaps in the session."""
     session_id = body.get("session_id", "").strip()
@@ -277,7 +298,7 @@ def _handle_analyze_gaps(body: dict, connection_id: str) -> dict:
 
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
-    agent_id = conn_data.get("agent_id", "")
+    skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     try:
         model = BedrockModel(
@@ -293,11 +314,10 @@ def _handle_analyze_gaps(body: dict, connection_id: str) -> dict:
             tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
         )
         enriched = (
-            f"[Context: session_id={session_id}, project_id={project_id}, "
-            f"agent_id={agent_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}]\n"
             f"IMPORTANT: When searching the knowledge base, always use "
             f"project_id='{project_id}' to scope results. "
-            f"When searching agent skills, use agent_id='{agent_id}'.\n\n"
+            f"When searching agent skills, use skill_ids='{skill_ids_str}'.\n\n"
             f"Analyze knowledge gaps for session {session_id}."
         )
         result = agent(enriched)
@@ -311,6 +331,9 @@ def _handle_analyze_gaps(body: dict, connection_id: str) -> dict:
         suggested = analysis.get("suggested_questions", [])
         if suggested:
             _store_suggested_questions(session_id, suggested)
+
+        # Persist gap analysis results (latest-wins overwrite)
+        _persist_gap_analysis(session_id, analysis)
 
         _post_to_connection(connection_id, {
             "type": "gapAnalysis",
@@ -339,7 +362,7 @@ def _handle_end_meeting(body: dict, connection_id: str) -> dict:
 
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
-    agent_id = conn_data.get("agent_id", "")
+    skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     _post_to_connection(connection_id, {
         "type": "status",
@@ -357,11 +380,12 @@ def _handle_end_meeting(body: dict, connection_id: str) -> dict:
         agent = Agent(
             model=model,
             system_prompt=system_prompt,
-            tools=[get_session_transcript, get_session_qa_pairs, save_summary_to_s3, search_agent_skills],
+            tools=[get_session_transcript, get_session_qa_pairs, get_session_gaps, save_summary_to_s3, search_agent_skills],
         )
         enriched = (
-            f"[Context: session_id={session_id}, project_id={project_id}, "
-            f"agent_id={agent_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}]\n"
+            f"IMPORTANT: When searching agent skills, use "
+            f"skill_ids='{skill_ids_str}'.\n\n"
             f"Generate a meeting summary for session {session_id}."
         )
         result = agent(enriched)
@@ -404,7 +428,7 @@ def _handle_retro_analysis(body: dict, connection_id: str) -> dict:
 
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
-    agent_id = conn_data.get("agent_id", "")
+    skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     _post_to_connection(connection_id, {
         "type": "status",
@@ -425,8 +449,9 @@ def _handle_retro_analysis(body: dict, connection_id: str) -> dict:
             tools=[get_session_transcript, get_meeting_summary, get_session_qa_pairs, search_agent_skills],
         )
         enriched = (
-            f"[Context: session_id={session_id}, project_id={project_id}, "
-            f"agent_id={agent_id}]\n"
+            f"[Context: session_id={session_id}, project_id={project_id}]\n"
+            f"IMPORTANT: When searching agent skills, use "
+            f"skill_ids='{skill_ids_str}'.\n\n"
             f"Perform a retrospective analysis for session {session_id}."
         )
         result = agent(enriched)
@@ -471,6 +496,7 @@ def _handle_retro_chat(body: dict, connection_id: str) -> dict:
         return {"statusCode": 400, "body": "No retro context"}
 
     retro_ctx = conn_data["retro_context"]
+    skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     try:
         model = BedrockModel(
@@ -489,7 +515,10 @@ def _handle_retro_chat(body: dict, connection_id: str) -> dict:
             tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
         )
         enriched = (
-            f"{TASK_PROMPTS['retroChat']}\n\n{message}"
+            f"{TASK_PROMPTS['retroChat']}\n"
+            f"IMPORTANT: When searching agent skills, use "
+            f"skill_ids='{skill_ids_str}'.\n\n"
+            f"{message}"
         )
         result = agent(enriched)
 

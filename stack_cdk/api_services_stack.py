@@ -56,6 +56,7 @@ class ApiServicesStack(Stack):
         self._create_warm_pool_routes()
         # D2 additions
         self._create_agent_routes()
+        self._create_agent_skill_routes()
         self._create_personality_routes()
         self._create_skill_routes()
         self._create_qa_routes()
@@ -107,6 +108,40 @@ class ApiServicesStack(Stack):
         )
         self.api.add_gateway_response(
             "Default5xx",
+            type=apigw.ResponseType.DEFAULT_5_XX,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
+
+        # Add CORS headers to Gateway Responses for error cases
+        self.api.add_gateway_response(
+            "Unauthorized",
+            type=apigw.ResponseType.UNAUTHORIZED,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
+        self.api.add_gateway_response(
+            "AccessDenied",
+            type=apigw.ResponseType.ACCESS_DENIED,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
+        self.api.add_gateway_response(
+            "Default4XX",
+            type=apigw.ResponseType.DEFAULT_4_XX,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
+        self.api.add_gateway_response(
+            "Default5XX",
             type=apigw.ResponseType.DEFAULT_5_XX,
             response_headers={
                 "Access-Control-Allow-Origin": "'*'",
@@ -210,6 +245,32 @@ class ApiServicesStack(Stack):
         users_resource.add_method(
             "POST",
             apigw.LambdaIntegration(self.lambda_stack.create_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        user_id_resource = users_resource.add_resource("{userId}")
+
+        # GET /users/{userId} - Get single user (admin only)
+        user_id_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.get_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # PUT /users/{userId} - Update user (admin only)
+        user_id_resource.add_method(
+            "PUT",
+            apigw.LambdaIntegration(self.lambda_stack.update_user_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # DELETE /users/{userId} - Delete user (admin only)
+        user_id_resource.add_method(
+            "DELETE",
+            apigw.LambdaIntegration(self.lambda_stack.delete_user_fn),
             authorizer=self.admin_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
@@ -332,7 +393,11 @@ class ApiServicesStack(Stack):
         
         # GET /users/{userId}/projects - Get projects for user (admin only)
         users_resource = self.api.root.get_resource("users")
+        if not users_resource:
+            users_resource = self.api.root.add_resource("users")
         user_resource = users_resource.get_resource("{userId}")
+        if not user_resource:
+            user_resource = users_resource.add_resource("{userId}")
         user_projects_resource = user_resource.add_resource("projects")
         user_projects_resource.add_method(
             "GET",
@@ -530,6 +595,7 @@ class ApiServicesStack(Stack):
         )
 
         agent_resource = agents_resource.add_resource("{agentId}")
+        self.agent_resource = agent_resource
         agent_resource.add_method(
             "GET",
             apigw.LambdaIntegration(self.lambda_stack.agents_crud_fn),
@@ -545,6 +611,45 @@ class ApiServicesStack(Stack):
         agent_resource.add_method(
             "DELETE",
             apigw.LambdaIntegration(self.lambda_stack.agents_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # Test Prompt — POST /agents/test-prompt
+        test_prompt_resource = agents_resource.add_resource("test-prompt")
+        test_prompt_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.test_prompt_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+    def _create_agent_skill_routes(self) -> None:
+        """Create agent-skill assignment REST routes under /agents/{agentId}/skills."""
+        skills_resource = self.agent_resource.add_resource("skills")
+
+        # GET /agents/{agentId}/skills - List skills for agent
+        skills_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.agent_skills_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        skill_resource = skills_resource.add_resource("{skillId}")
+
+        # POST /agents/{agentId}/skills/{skillId} - Assign skill to agent
+        skill_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.agent_skills_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # DELETE /agents/{agentId}/skills/{skillId} - Unassign skill from agent
+        skill_resource.add_method(
+            "DELETE",
+            apigw.LambdaIntegration(self.lambda_stack.agent_skills_crud_fn),
             authorizer=self.admin_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
@@ -618,6 +723,15 @@ class ApiServicesStack(Stack):
         )
         skill_resource.add_method(
             "DELETE",
+            apigw.LambdaIntegration(self.lambda_stack.skills_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # Replace document — POST /skills/{skillId}/replace-document
+        replace_doc_resource = skill_resource.add_resource("replace-document")
+        replace_doc_resource.add_method(
+            "POST",
             apigw.LambdaIntegration(self.lambda_stack.skills_crud_fn),
             authorizer=self.admin_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
