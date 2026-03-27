@@ -652,6 +652,20 @@ class LambdaStack(Stack):
         self.skills_bucket = s3.CfnBucket(
             self, "SkillsBucket",
             bucket_name=skills_bucket_name,
+            cors_configuration=s3.CfnBucket.CorsConfigurationProperty(
+                cors_rules=[
+                    s3.CfnBucket.CorsRuleProperty(
+                        allowed_headers=["*"],
+                        allowed_methods=["PUT", "POST", "GET"],
+                        allowed_origins=[
+                            "http://localhost:3000",
+                            "https://d2bed2yjnef4ve.cloudfront.net",
+                        ],
+                        exposed_headers=["ETag"],
+                        max_age=3600,
+                    ),
+                ],
+            ),
             notification_configuration=s3.CfnBucket.NotificationConfigurationProperty(
                 lambda_configurations=[
                     s3.CfnBucket.LambdaConfigurationProperty(
