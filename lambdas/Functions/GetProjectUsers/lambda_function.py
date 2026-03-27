@@ -1,7 +1,7 @@
 """
 GetProjectUsers Lambda Function
 
-Gets all users assigned to a specific project. Admin only (enforced by Lambda Authorizer).
+Gets all users assigned to a specific project with user details. Admin only (enforced by Lambda Authorizer).
 """
 
 import os
@@ -17,8 +17,8 @@ logger = Logger()
 tracer = Tracer()
 
 dynamodb = boto3.resource("dynamodb")
-table_name = os.environ.get("PROJECT_USERS_TABLE")
-table = dynamodb.Table(table_name)
+project_users_table = dynamodb.Table(os.environ.get("PROJECT_USERS_TABLE"))
+users_table = dynamodb.Table(os.environ.get("USERS_TABLE"))
 
 
 def _get_project_id(event: dict) -> str:
@@ -29,19 +29,37 @@ def _get_project_id(event: dict) -> str:
     return project_id
 
 
+def _get_user_details(user_id: str) -> dict | None:
+    response = users_table.get_item(Key={"user_id": user_id})
+    item = response.get("Item")
+    if item:
+        item.pop("password_hash", None)
+    return item
+
+
 @tracer.capture_lambda_handler
 def lambda_handler(event, context):
     try:
         project_id = _get_project_id(event)
         
-        response = table.query(
+        response = project_users_table.query(
             IndexName="project-index",
             KeyConditionExpression=Key("project_id").eq(project_id),
         )
         
+        project_user_items = response.get("Items", [])
+        
+        users = []
+        for item in project_user_items:
+            user_details = _get_user_details(item["user_id"])
+            if user_details:
+                user_details["project_user_id"] = item["project_user_id"]
+                user_details["assigned_at"] = item.get("created_at")
+                users.append(user_details)
+        
         result = {
-            "items": response.get("Items", []),
-            "count": response.get("Count", 0),
+            "users": users,
+            "total": len(users),
         }
         
         return createResponse(200, "Project users retrieved successfully", result)

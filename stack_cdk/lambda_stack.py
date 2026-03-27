@@ -481,6 +481,7 @@ class LambdaStack(Stack):
         self.update_bot_credential_fn = self._create_lambda_function(
             "UpdateBotCredential", "lambdas/Functions/UpdateBotCredential"
         )
+        self.update_bot_credential_fn.add_environment("EVENT_BUS_NAME", "default")
 
         self.delete_bot_credential_fn = self._create_lambda_function(
             "DeleteBotCredential", "lambdas/Functions/DeleteBotCredential"

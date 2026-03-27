@@ -253,8 +253,8 @@ def lambda_handler(event, context):
             "bot_status": "pending" if meeting_link else "none",
             "is_active": "inactive",
             "task_arn": None,
-            "start_time": data.get("start_time"),
-            "end_time": data.get("end_time"),
+            "start_time": None,
+            "end_time": None,
             "created_at": now,
             "updated_at": now,
         }
