@@ -75,34 +75,43 @@ class ApiServicesStack(Stack):
                 tracing_enabled=True,
             ),
             default_cors_preflight_options=apigw.CorsOptions(
-                allow_origins=["http://localhost:3000", "https://d2bed2yjnef4ve.cloudfront.net"],
+                allow_origins=apigw.Cors.ALL_ORIGINS,
                 allow_methods=apigw.Cors.ALL_METHODS,
                 allow_headers=["Content-Type", "Authorization"],
-                allow_credentials=True,
             ),
         )
 
-        # Add CORS headers to API Gateway error responses (4XX/5XX).
-        # Without these, authorizer rejections (401/403) return no CORS
-        # headers and the browser blocks the response entirely.
-        # Use method.request.header.Origin to dynamically reflect the
-        # request origin, supporting both localhost and CloudFront.
+        # Add CORS headers to Gateway Responses for error cases
+        self.api.add_gateway_response(
+            "Unauthorized",
+            type=apigw.ResponseType.UNAUTHORIZED,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
+        self.api.add_gateway_response(
+            "AccessDenied",
+            type=apigw.ResponseType.ACCESS_DENIED,
+            response_headers={
+                "Access-Control-Allow-Origin": "'*'",
+                "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
+            },
+        )
         self.api.add_gateway_response(
             "Default4XX",
             type=apigw.ResponseType.DEFAULT_4_XX,
             response_headers={
-                "Access-Control-Allow-Origin": "method.request.header.Origin",
+                "Access-Control-Allow-Origin": "'*'",
                 "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
-                "Access-Control-Allow-Credentials": "'true'",
             },
         )
         self.api.add_gateway_response(
             "Default5XX",
             type=apigw.ResponseType.DEFAULT_5_XX,
             response_headers={
-                "Access-Control-Allow-Origin": "method.request.header.Origin",
+                "Access-Control-Allow-Origin": "'*'",
                 "Access-Control-Allow-Headers": "'Content-Type,Authorization'",
-                "Access-Control-Allow-Credentials": "'true'",
             },
         )
 
