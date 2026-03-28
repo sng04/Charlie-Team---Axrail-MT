@@ -81,6 +81,18 @@ if not authorization:
 - Handle conditional writes for optimistic locking
 - Use Decimal type for numeric precision
 
+### Cascade Delete Pattern
+When deleting a parent resource that owns child resources, follow this pattern:
+1. Check for blocking conditions first (e.g., active meetings prevent project deletion)
+2. Return 409 Conflict with a descriptive message if blocked
+3. Delete children bottom-up: grandchildren → children → parent
+4. Use paginated queries + batch_writer for efficient bulk deletes
+5. Log deletion counts for observability
+
+Current cascade rules:
+- **DeleteProject**: rejects if any session has `bot_status = "in_meeting"`. Deletes transcripts → sessions → project_users → project. Bot credentials are NOT deleted.
+- **DeleteSession**: deletes session only (transcripts are not cascade-deleted yet)
+
 ### Error Handling for Data Operations
 ```python
 try:
