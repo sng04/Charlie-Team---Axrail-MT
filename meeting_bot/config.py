@@ -55,6 +55,7 @@ KEEP_ALIVE_INTERVAL = int(os.environ.get("KEEP_ALIVE_INTERVAL", "30"))
 # ==============================================================================
 ENABLE_TRANSCRIPTION = os.environ.get("ENABLE_TRANSCRIPTION", "true").lower() == "true"
 TRANSCRIBE_LANGUAGE = os.environ.get("TRANSCRIBE_LANGUAGE", "en-US")
+TRANSCRIBE_VOCABULARY_NAME = os.environ.get("TRANSCRIBE_VOCABULARY_NAME", "")
 
 # ==============================================================================
 # WebSocket Configuration (for real-time transcript broadcast)

@@ -1,0 +1,200 @@
+Phrase	SoundsLike	IPA	DisplayAs
+Kubernetes		
+DynamoDB		
+microservices		
+A.P.I.-Gateway			API Gateway
+WebSocket		
+Lambda		
+CloudFormation		
+E.C.S.			ECS
+Fargate		
+DevOps		
+C.I.C.D.			CI/CD
+GitHub		
+GitLab		
+Bitbucket		
+Jenkins		
+Terraform		
+Docker		
+Dockerfile		
+Nginx		
+Redis		
+PostgreSQL		
+MySQL		
+MongoDB		
+GraphQL		
+g.R.P.C.			gRPC
+OAuth		
+J.W.T.			JWT
+C.O.R.S.			CORS
+H.T.T.P.S.			HTTPS
+S.S.L.			SSL
+T.L.S.			TLS
+Webpack		
+TypeScript		
+JavaScript		
+Node-J.S.			Node.js
+React		
+Vue-J.S.			Vue.js
+Angular		
+Next-J.S.			Next.js
+Nuxt		
+Svelte		
+Tailwind		
+Bootstrap		
+Python		
+FastAPI		
+Django		
+Flask		
+Celery		
+SQLAlchemy		
+Java		
+Spring-Boot			Spring Boot
+Kotlin		
+Gradle		
+Maven		
+Golang		
+Rust		
+C-plus-plus			C++
+Swift		
+Flutter		
+Dart		
+S-three			S3
+E.C.-two			EC2
+R.D.S.			RDS
+S.Q.S.			SQS
+S.N.S.			SNS
+CloudWatch		
+CloudFront		
+I.A.M.			IAM
+V.P.C.			VPC
+Cognito		
+Bedrock		
+SageMaker		
+EventBridge		
+Step-Functions			Step Functions
+OpenSearch		
+ElastiCache		
+Aurora		
+Kinesis		
+AppSync		
+C.D.K.			CDK
+S.A.M.			SAM
+Serverless		
+Amplify		
+Azure		
+G.C.P.			GCP
+Firebase		
+Vercel		
+Netlify		
+Heroku		
+Figma		
+wireframe		
+mockup		
+prototype		
+U.I.-U.X.			UI/UX
+responsive-design			responsive design
+design-system			design system
+accessibility		
+W.C.A.G.			WCAG
+heuristic		
+usability		
+user-journey			user journey
+persona		
+A-B-testing			A/B testing
+design-tokens			design tokens
+I.o.T.			IoT
+M.Q.T.T.			MQTT
+Raspberry-Pi			Raspberry Pi
+Arduino		
+E.S.P.-thirty-two			ESP32
+LoRa		
+LoRaWAN		
+Zigbee		
+Bluetooth-Low-Energy			Bluetooth Low Energy
+B.L.E.			BLE
+edge-computing			edge computing
+O.T.A.			OTA
+firmware		
+embedded		
+R.T.O.S.			RTOS
+G.P.I.O.			GPIO
+S.P.I.			SPI
+U.A.R.T.			UART
+A.W.S.-I.o.T.-Core			AWS IoT Core
+I.o.T.-Greengrass			IoT Greengrass
+digital-twin			digital twin
+telemetry		
+sensor-fusion			sensor fusion
+machine-learning			machine learning
+deep-learning			deep learning
+neural-network			neural network
+transformer		
+G.P.T.			GPT
+L.L.M.			LLM
+R.A.G.			RAG
+fine-tuning			fine-tuning
+embeddings		
+vector-database			vector database
+TensorFlow		
+PyTorch		
+scikit-learn		
+Hugging-Face			Hugging Face
+LangChain		
+reinforcement-learning			reinforcement learning
+supervised-learning			supervised learning
+unsupervised-learning			unsupervised learning
+convolutional-neural-network			convolutional neural network
+C.N.N.			CNN
+R.N.N.			RNN
+L.S.T.M.			LSTM
+G.A.N.			GAN
+N.L.P.			NLP
+computer-vision			computer vision
+object-detection			object detection
+Y.O.L.O.			YOLO
+hyperparameter		
+epoch		
+batch-size			batch size
+learning-rate			learning rate
+overfitting		
+inference		
+latency		
+throughput		
+tokenizer		
+prompt-engineering			prompt engineering
+Scrum		
+Kanban		
+sprint		
+backlog		
+retrospective		
+standup		
+refactoring		
+technical-debt			technical debt
+code-review			code review
+pull-request			pull request
+merge-request			merge request
+monorepo		
+polyrepo		
+idempotent		
+middleware		
+orchestration		
+observability		
+Prometheus		
+Grafana		
+Datadog		
+OpenTelemetry		
+Elasticsearch		
+Kibana		
+Kafka		
+RabbitMQ		
+pub-sub			pub/sub
+sharding		
+replication		
+load-balancer			load balancer
+auto-scaling			auto-scaling
+blue-green-deployment			blue-green deployment
+canary-deployment			canary deployment
+feature-flag			feature flag
+rollback		
+hotfix		

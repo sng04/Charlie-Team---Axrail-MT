@@ -255,6 +255,7 @@ class MeetingBotStack(Stack):
                 "LOG_LEVEL": "INFO",
                 "ENABLE_TRANSCRIPTION": "true",
                 "TRANSCRIBE_LANGUAGE": "en-US",
+                "TRANSCRIBE_VOCABULARY_NAME": "tech-vocab",
                 "AWS_REGION": self.region,
                 "ENVIRONMENT": self._environment,
                 "SQS_QUEUE_URL": self._meeting_queue.queue_url,

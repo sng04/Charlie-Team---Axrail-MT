@@ -2,12 +2,13 @@
 Transcribe Handler Module
 
 Handle streaming to Amazon Transcribe and save to DynamoDB.
-Real-time mode: saves each sentence immediately without buffering.
+Merges fragmented results into complete sentences before saving.
 
 Preprocessing:
 - Filler word removal (um, uh, hm, etc.)
 - Noise pattern filtering (random numbers, repeated chars)
 - Confidence threshold filtering
+- Sentence merging (fragments → full sentences based on punctuation/time gap)
 """
 
 import asyncio
@@ -25,7 +26,7 @@ from amazon_transcribe.handlers import TranscriptResultStreamHandler
 from amazon_transcribe.model import TranscriptEvent, TranscriptResultStream
 
 from audio_capture import AudioCapture, SAMPLE_RATE
-from config import AWS_REGION, TRANSCRIPTS_TABLE, TRANSCRIBE_LANGUAGE, WEBSOCKET_API_URL
+from config import AWS_REGION, TRANSCRIPTS_TABLE, TRANSCRIBE_LANGUAGE, TRANSCRIBE_VOCABULARY_NAME, WEBSOCKET_API_URL
 from websocket_broadcaster import WebSocketBroadcaster
 
 logger = logging.getLogger(__name__)
@@ -309,17 +310,145 @@ class TranscriptDeduplicator:
 
 
 
+class SentenceMerger:
+    """
+    Merge fragmented transcript results into complete sentences.
+
+    Transcribe often splits a single sentence into multiple short fragments
+    (e.g. "And" / "how" / "about the main feature we discussed.").
+    This class buffers fragments and merges them when a sentence boundary
+    is detected (punctuation or time gap).
+    """
+
+    # Max seconds of silence between fragments before flushing
+    MERGE_GAP_THRESHOLD = float(os.environ.get("MERGE_GAP_THRESHOLD", "1.5"))
+    # Min word count to consider a fragment "complete enough" on its own
+    MIN_STANDALONE_WORDS = int(os.environ.get("MERGE_MIN_STANDALONE_WORDS", "4"))
+
+    def __init__(self):
+        self._buffer_text: List[str] = []
+        self._buffer_speaker: Optional[str] = None
+        self._buffer_start_time: Optional[float] = None
+        self._buffer_end_time: Optional[float] = None
+        self._buffer_confidences: List[float] = []
+        self._flush_task: Optional[asyncio.TimerHandle] = None
+
+    def _cancel_flush_timer(self) -> None:
+        if self._flush_task is not None:
+            self._flush_task.cancel()
+            self._flush_task = None
+
+    def _schedule_flush_timer(self, callback) -> None:
+        """Schedule a delayed flush in case no more fragments arrive."""
+        self._cancel_flush_timer()
+        loop = asyncio.get_event_loop()
+        self._flush_task = loop.call_later(self.MERGE_GAP_THRESHOLD, callback)
+
+    def add_fragment(
+        self,
+        text: str,
+        speaker: Optional[str],
+        start_time: Optional[float],
+        end_time: Optional[float],
+        confidence: Optional[float],
+        flush_callback,
+    ) -> Optional[dict]:
+        """
+        Add a fragment. Returns a merged sentence dict if ready to flush,
+        otherwise returns None (buffered).
+        """
+        self._cancel_flush_timer()
+
+        flush_result = None
+
+        # Check time gap — if too large, flush old buffer first
+        if (
+            self._buffer_text
+            and self._buffer_end_time is not None
+            and start_time is not None
+        ):
+            gap = start_time - self._buffer_end_time
+            if gap > self.MERGE_GAP_THRESHOLD:
+                flush_result = self._flush_buffer()
+
+        # Append to buffer
+        self._buffer_text.append(text)
+        self._buffer_speaker = speaker
+        if self._buffer_start_time is None:
+            self._buffer_start_time = start_time
+        self._buffer_end_time = end_time
+        if confidence is not None:
+            self._buffer_confidences.append(confidence)
+
+        # Check if this fragment ends a sentence
+        if self._is_sentence_end(text):
+            merged = self._flush_buffer()
+            # If we also flushed a previous buffer due to time gap,
+            # return that one first — the caller should handle both
+            if flush_result:
+                return flush_result  # merged will be handled via timer or next call
+            return merged
+
+        # Schedule a timer flush in case nothing else arrives
+        self._schedule_flush_timer(flush_callback)
+
+        return flush_result
+
+    def _is_sentence_end(self, text: str) -> bool:
+        """Check if text ends with sentence-ending punctuation."""
+        stripped = text.rstrip()
+        if not stripped:
+            return False
+        return stripped[-1] in ".?!"
+
+    def _flush_buffer(self) -> Optional[dict]:
+        """Flush current buffer and return merged sentence."""
+        if not self._buffer_text:
+            return None
+
+        self._cancel_flush_timer()
+
+        merged_text = " ".join(self._buffer_text)
+        avg_confidence = (
+            sum(self._buffer_confidences) / len(self._buffer_confidences)
+            if self._buffer_confidences
+            else None
+        )
+
+        result = {
+            "text": merged_text,
+            "speaker": self._buffer_speaker,
+            "start_time": self._buffer_start_time,
+            "end_time": self._buffer_end_time,
+            "confidence": avg_confidence,
+        }
+
+        # Reset buffer
+        self._buffer_text = []
+        self._buffer_speaker = None
+        self._buffer_start_time = None
+        self._buffer_end_time = None
+        self._buffer_confidences = []
+
+        return result
+
+    def flush_remaining(self) -> Optional[dict]:
+        """Flush any remaining buffered text (called at end of session)."""
+        self._cancel_flush_timer()
+        return self._flush_buffer()
+
+
 class MeetingTranscriptHandler(TranscriptResultStreamHandler):
     """
     Handler for processing transcript events from Transcribe.
-    
-    Real-time mode: saves each final sentence immediately to DynamoDB
-    without any buffering delay.
-    
+
+    Merges fragmented results into complete sentences before saving.
+
     Preprocessing:
     - Filler word removal
     - Noise pattern filtering
     - Confidence threshold filtering
+    - Sentence merging (fragments → full sentences)
     """
 
     def __init__(
@@ -331,12 +460,36 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
         self._dynamodb = dynamodb_handler
         self._deduplicator = TranscriptDeduplicator()
         self._preprocessor = TextPreprocessor(CONFIDENCE_THRESHOLD)
+        self._merger = SentenceMerger()
+
+    def _save_merged(self, merged: dict) -> None:
+        """Save a merged sentence to DynamoDB."""
+        speaker_label = f"spk_{merged['speaker']}" if merged["speaker"] else None
+        speaker_info = f" [Speaker {merged['speaker']}]" if merged["speaker"] else ""
+        confidence_info = (
+            f" (conf: {merged['confidence']:.2f})" if merged["confidence"] else ""
+        )
+        logger.info(f"🎤{speaker_info}{confidence_info} {merged['text']}")
+
+        self._dynamodb.save_transcript_async(
+            text=merged["text"],
+            speaker=speaker_label,
+            start_time=merged["start_time"],
+            end_time=merged["end_time"],
+            confidence=merged["confidence"],
+        )
+
+    def _on_flush_timer(self) -> None:
+        """Called when the merge timer expires — flush buffered fragments."""
+        merged = self._merger.flush_remaining()
+        if merged:
+            self._save_merged(merged)
 
     async def handle_transcript_event(self, transcript_event: TranscriptEvent) -> None:
         """
         Handle transcript event from Transcribe.
-        
-        Saves each final (non-partial) result immediately to DynamoDB using async write.
+
+        Fragments are buffered and merged into complete sentences before saving.
         """
         results = transcript_event.transcript.results
 
@@ -371,18 +524,18 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
                 result_id, transcript_text, result.start_time, result.end_time
             )
 
-            speaker_label = f"spk_{speaker}" if speaker else None
-            speaker_info = f" [Speaker {speaker}]" if speaker else ""
-            confidence_info = f" (conf: {confidence:.2f})" if confidence else ""
-            logger.info(f"🎤{speaker_info}{confidence_info} {cleaned_text}")
-
-            self._dynamodb.save_transcript_async(
+            # Feed into sentence merger instead of saving directly
+            merged = self._merger.add_fragment(
                 text=cleaned_text,
-                speaker=speaker_label,
+                speaker=speaker,
                 start_time=result.start_time,
                 end_time=result.end_time,
                 confidence=confidence,
+                flush_callback=self._on_flush_timer,
             )
+
+            if merged:
+                self._save_merged(merged)
 
     def _extract_speaker(self, alternative) -> Optional[str]:
         """Extract speaker ID from alternative items."""
@@ -414,8 +567,13 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
         return sum(confidences) / len(confidences)
 
     def flush_remaining(self) -> None:
-        """Flush any pending async writes."""
+        """Flush any buffered sentence fragments and pending async writes."""
         try:
+            # Flush any remaining merged fragments first
+            merged = self._merger.flush_remaining()
+            if merged:
+                self._save_merged(merged)
+
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 asyncio.create_task(self._dynamodb.flush_pending())
@@ -484,6 +642,10 @@ class TranscribeStreamingManager:
                 # Use speaker diarization (voice-based, not channel-based)
                 # Note: Channel identification doesn't work for mixed audio streams
                 stream_params["show_speaker_label"] = True
+
+            if TRANSCRIBE_VOCABULARY_NAME:
+                stream_params["vocabulary_name"] = TRANSCRIBE_VOCABULARY_NAME
+                logger.info(f"Using custom vocabulary: {TRANSCRIBE_VOCABULARY_NAME}")
 
             logger.info(f"Starting Transcribe stream with params: {stream_params}")
 

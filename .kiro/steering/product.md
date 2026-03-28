@@ -20,7 +20,10 @@ The architecture consists of three major components:
 ## Operational Modes
 Users navigate the assistant through two primary modes:
 
-**Live Output Mode:** Provides real-time assistance by displaying meeting transcriptions within 2 seconds of speech and delivering generated answers to detected questions within 1 second of generation.
+**Live Output Mode:** Provides real-time assistance by displaying meeting transcriptions within 2 seconds of speech and delivering generated answers to detected questions within 1 second of generation. Transcription quality is enhanced by:
+- **Sentence Merging**: Fragmented Transcribe results are buffered and merged into complete sentences based on punctuation and time gaps (configurable via `MERGE_GAP_THRESHOLD`, default 1.5s).
+- **Custom Vocabulary**: AWS Transcribe Custom Vocabulary (`tech-vocab`) with 170+ technical terms across software engineering, cloud, IoT, AI/ML, and design domains. Configured via `TRANSCRIBE_VOCABULARY_NAME` environment variable on ECS tasks.
+- **Text Preprocessing**: Filler word removal, noise pattern filtering, confidence threshold filtering, and deduplication.
 **Retro Mode:** Allows teams to review completed meeting transcripts, identify missed agenda items, summarize action steps, and receive coaching insights based on rubrics. Users can also chat with the system to gain further insights into their performance.
 
 ## Key Success Metrics
