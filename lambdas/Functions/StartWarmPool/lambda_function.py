@@ -29,6 +29,7 @@ ECS_TASK_DEFINITION = os.environ.get("ECS_TASK_DEFINITION")
 ECS_SUBNETS = os.environ.get("ECS_SUBNETS", "").split(",")
 ECS_SECURITY_GROUP = os.environ.get("ECS_SECURITY_GROUP")
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+WEBSOCKET_API_URL = os.environ.get("WEBSOCKET_API_URL", "")
 
 
 def _parse_body(event: dict) -> dict:
@@ -143,6 +144,7 @@ def _start_warm_container(credential_id: str) -> str:
                             {"name": "CREDENTIAL_ID", "value": credential_id},
                             {"name": "ENVIRONMENT", "value": ENVIRONMENT},
                             {"name": "WARM_POOL_MODE", "value": "true"},
+                            {"name": "WEBSOCKET_API_URL", "value": WEBSOCKET_API_URL},
                         ],
                     }
                 ]

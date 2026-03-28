@@ -800,6 +800,11 @@ class LambdaStack(Stack):
         ws_endpoint = f"{self.ws_api.ref}.execute-api.{self.region}.amazonaws.com/production"
         self.strands_agent_fn.add_environment("WEBSOCKET_ENDPOINT", ws_endpoint)
 
+        # Set WEBSOCKET_API_URL for ECS tasks (used by CreateSession and StartWarmPool)
+        # This is passed to ECS containers for real-time transcript broadcast
+        self.create_session_fn.add_environment("WEBSOCKET_API_URL", ws_endpoint)
+        self.start_warm_pool_fn.add_environment("WEBSOCKET_API_URL", ws_endpoint)
+
     def _create_ecs_task_state_handler(self) -> None:
         """Create Lambda and EventBridge rule to handle ECS task state changes."""
         self.handle_ecs_task_state_fn = _lambda.Function(

@@ -25,7 +25,8 @@ from amazon_transcribe.handlers import TranscriptResultStreamHandler
 from amazon_transcribe.model import TranscriptEvent, TranscriptResultStream
 
 from audio_capture import AudioCapture, SAMPLE_RATE
-from config import AWS_REGION, TRANSCRIPTS_TABLE, TRANSCRIBE_LANGUAGE
+from config import AWS_REGION, TRANSCRIPTS_TABLE, TRANSCRIBE_LANGUAGE, WEBSOCKET_API_URL
+from websocket_broadcaster import WebSocketBroadcaster
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +119,11 @@ class TextPreprocessor:
 class DynamoDBHandler:
     """Handle saving transcripts to DynamoDB with async write support."""
 
-    def __init__(self, table_name: str, session_id: str):
+    def __init__(self, table_name: str, session_id: str, broadcaster: Optional["WebSocketBroadcaster"] = None):
         self._dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
         self._table = self._dynamodb.Table(table_name)
         self._session_id = session_id
+        self._broadcaster = broadcaster
         self._pending_tasks: List[asyncio.Task] = []
         self._write_count = 0
         self._total_write_time = 0.0
@@ -136,15 +138,17 @@ class DynamoDBHandler:
         confidence: Optional[float] = None,
     ) -> None:
         """
-        Queue transcript for async save to DynamoDB (fire-and-forget).
+        Queue transcript for async save to DynamoDB and broadcast to WebSocket.
         
         Returns immediately without waiting for DynamoDB response.
+        Both DynamoDB write and WebSocket broadcast happen in parallel.
         """
         if not text.strip():
             return
 
         timestamp = datetime.now(timezone.utc).isoformat()
 
+        # Build item once - same structure for DDB and WebSocket
         item = {
             "session_id": self._session_id,
             "timestamp": timestamp,
@@ -163,13 +167,26 @@ class DynamoDBHandler:
         if confidence is not None:
             item["confidence"] = str(round(confidence, 3))
 
-        task = asyncio.create_task(self._async_put_item(item, text, speaker))
+        # Create task for parallel DDB write + WebSocket broadcast
+        task = asyncio.create_task(self._async_save_and_broadcast(item, text, speaker))
         self._pending_tasks.append(task)
         
         self._cleanup_completed_tasks()
         
         speaker_info = f" [{speaker}]" if speaker else ""
-        logger.info(f"� Queued{speaker_info}: {text}")
+        logger.info(f"📤 Queued{speaker_info}: {text}")
+
+    async def _async_save_and_broadcast(
+        self, item: dict, text: str, speaker: Optional[str]
+    ) -> None:
+        """Execute DynamoDB put_item and WebSocket broadcast in parallel."""
+        tasks = [self._async_put_item(item, text, speaker)]
+        
+        # Broadcast to WebSocket if broadcaster is available
+        if self._broadcaster:
+            tasks.append(self._broadcaster.broadcast_transcript_line(item))
+        
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _async_put_item(
         self, item: dict, text: str, speaker: Optional[str]
@@ -411,10 +428,12 @@ class MeetingTranscriptHandler(TranscriptResultStreamHandler):
 class TranscribeStreamingManager:
     """Manager for handling Transcribe streaming session."""
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, websocket_api_url: str = None):
         self._session_id = session_id
+        self._websocket_api_url = websocket_api_url or WEBSOCKET_API_URL
         self._audio_capture = AudioCapture()
-        self._dynamodb = DynamoDBHandler(TRANSCRIPTS_TABLE, session_id)
+        self._broadcaster: Optional[WebSocketBroadcaster] = None
+        self._dynamodb: Optional[DynamoDBHandler] = None
         self._is_running = False
         self._client: Optional[TranscribeStreamingClient] = None
         self._handler: Optional[MeetingTranscriptHandler] = None
@@ -426,6 +445,25 @@ class TranscribeStreamingManager:
         logger.info(f"Confidence threshold: {CONFIDENCE_THRESHOLD}")
 
         self._is_running = True
+
+        # Initialize WebSocket broadcaster if endpoint is configured
+        if self._websocket_api_url:
+            logger.info(f"WebSocket broadcast enabled: {self._websocket_api_url[:50]}...")
+            self._broadcaster = WebSocketBroadcaster(
+                session_id=self._session_id,
+                websocket_endpoint=self._websocket_api_url,
+                region=AWS_REGION,
+            )
+            await self._broadcaster.initialize()
+        else:
+            logger.info("WebSocket broadcast disabled (no WEBSOCKET_API_URL)")
+
+        # Initialize DynamoDB handler with broadcaster
+        self._dynamodb = DynamoDBHandler(
+            TRANSCRIPTS_TABLE,
+            self._session_id,
+            broadcaster=self._broadcaster,
+        )
 
         await self._audio_capture.start()
 

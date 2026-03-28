@@ -221,6 +221,15 @@ class MeetingBotStack(Stack):
             )
         )
 
+        # Permission to post to WebSocket API for real-time transcript broadcast
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["execute-api:ManageConnections"],
+                resources=[f"arn:aws:execute-api:{self.region}:{self.account}:*/*/*/*"],
+            )
+        )
+
         self._task_definition = ecs.FargateTaskDefinition(
             self,
             "MeetingBotTask",

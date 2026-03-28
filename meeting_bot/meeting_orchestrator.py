@@ -37,6 +37,7 @@ from config import (
     BOT_POOL_TABLE,
     WARM_POOL_MODE,
     ECS_CONTAINER_METADATA_URI,
+    WEBSOCKET_API_URL,
 )
 
 logging.basicConfig(
@@ -296,10 +297,17 @@ class MeetingOrchestrator:
         self._is_logged_in = True
         logger.info("Initialization complete, ready for meetings")
 
-    async def run_single_meeting(self, session_id: str, meeting_url: str, container_id: str = None) -> None:
+    async def run_single_meeting(self, session_id: str, meeting_url: str, container_id: str = None, websocket_api_url: str = None) -> None:
         """Run a single meeting session."""
         logger.info(f"Starting meeting for session: {session_id}")
         logger.info(f"Meeting URL: {meeting_url}")
+
+        # Use provided websocket_api_url or fall back to config
+        ws_api_url = websocket_api_url or WEBSOCKET_API_URL
+        if ws_api_url:
+            logger.info(f"WebSocket broadcast enabled: {ws_api_url[:50]}...")
+        else:
+            logger.info("WebSocket broadcast disabled (no URL provided)")
 
         # Minimum duration (seconds) to consider meeting as successful
         # If meeting ends before this, it's likely an invalid/expired link
@@ -323,7 +331,7 @@ class MeetingOrchestrator:
             update_session_status(session_id, "in_meeting", container_id=container_id)
 
             if ENABLE_TRANSCRIPTION:
-                await self._start_transcription(session_id)
+                await self._start_transcription(session_id, ws_api_url)
 
             self._is_running = True
             await self._keep_alive(self._page, session_id)
@@ -445,11 +453,11 @@ class MeetingOrchestrator:
         logger.info("Stopping orchestrator...")
         self._is_running = False
 
-    async def _start_transcription(self, session_id: str) -> None:
+    async def _start_transcription(self, session_id: str, websocket_api_url: str = None) -> None:
         """Start transcription service."""
         logger.info("Starting transcription service...")
         await asyncio.sleep(2)
-        self._transcribe_manager = TranscribeStreamingManager(session_id)
+        self._transcribe_manager = TranscribeStreamingManager(session_id, websocket_api_url)
         self._transcription_task = asyncio.create_task(self._run_transcription())
         logger.info("Transcription service started")
 
@@ -475,7 +483,8 @@ class MeetingOrchestrator:
                         except Exception:
                             pass
                         self._transcribe_manager = TranscribeStreamingManager(
-                            self._transcribe_manager._session_id
+                            self._transcribe_manager._session_id,
+                            self._transcribe_manager._websocket_api_url,
                         )
         
         if retry_count >= max_retries:
@@ -820,6 +829,7 @@ async def poll_sqs_for_meetings(orchestrator: MeetingOrchestrator, pool_manager:
 
                 session_id = body.get("session_id")
                 meeting_url = body.get("meeting_url")
+                ws_api_url = body.get("websocket_api_url", WEBSOCKET_API_URL)
 
                 if not session_id or not meeting_url:
                     logger.warning(f"Invalid message format: {body}")
@@ -839,6 +849,7 @@ async def poll_sqs_for_meetings(orchestrator: MeetingOrchestrator, pool_manager:
                         session_id=session_id,
                         meeting_url=meeting_url,
                         container_id=pool_manager._container_id,
+                        websocket_api_url=ws_api_url,
                     )
                 except Exception as e:
                     logger.error(f"Meeting failed: {e}")

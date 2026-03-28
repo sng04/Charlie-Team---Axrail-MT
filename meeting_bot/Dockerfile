@@ -43,6 +43,7 @@ COPY config.py .
 COPY browser_manager.py .
 COPY audio_capture.py .
 COPY transcribe_handler.py .
+COPY websocket_broadcaster.py .
 COPY meeting_orchestrator.py .
 COPY entrypoint.sh .
 COPY pulse-client.conf /etc/pulse/client.conf
