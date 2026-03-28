@@ -2,7 +2,69 @@
 
 ## Overview
 
-The `processTranscript` WebSocket action handles real-time meeting transcript lines. It processes all incoming lines without speaker classification, stores transcript entries, matches questions against pre-set topics, detects questions, and captures answers automatically.
+The live transcript system provides real-time transcript streaming from meeting bots to connected WebSocket clients. When the bot captures audio and transcribes it, each transcript line is simultaneously:
+1. Saved to DynamoDB (TranscriptsTable)
+2. Broadcast to connected WebSocket clients in real-time
+
+## Real-Time Transcript Broadcast
+
+### Architecture
+
+```mermaid
+flowchart LR
+    A[Meeting Bot] --> B[Amazon Transcribe]
+    B --> C[TranscribeStreamingManager]
+    C --> D[DynamoDB Write]
+    C --> E[WebSocket Broadcast]
+    E --> F[Connected Clients]
+    D --> G[TranscriptsTable]
+```
+
+### WebSocket Message Format
+
+When a transcript line is captured, clients receive:
+
+```json
+{
+  "type": "transcriptLine",
+  "line": {
+    "session_id": "abc123",
+    "transcript_id": "uuid-here",
+    "text": "Hello, welcome to the meeting.",
+    "speaker": "spk_0",
+    "start_time": "10.25",
+    "end_time": "12.50",
+    "confidence": "0.923",
+    "timestamp": "2025-01-15T10:30:15.123Z",
+    "is_partial": false,
+    "created_at": "2025-01-15T10:30:15.123Z"
+  }
+}
+```
+
+The `line` object contains the exact same data structure that is stored in DynamoDB, ensuring consistency between real-time and historical data.
+
+### Frontend Integration
+
+```javascript
+// Connect to WebSocket with session_id
+const ws = new WebSocket('wss://{api-id}.execute-api.{region}.amazonaws.com/production?session_id=abc123');
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  
+  if (data.type === 'transcriptLine') {
+    // Real-time transcript line from bot
+    const line = data.line;
+    console.log(`[${line.speaker}] ${line.text}`);
+    // Update UI with new transcript line
+  }
+};
+```
+
+## processTranscript WebSocket Action
+
+The `processTranscript` WebSocket action handles transcript lines sent by external callers (not the bot). It processes all incoming lines without speaker classification, stores transcript entries, matches questions against pre-set topics, detects questions, and captures answers automatically.
 
 ## Three-Stage QA Pipeline
 

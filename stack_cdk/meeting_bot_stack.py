@@ -205,6 +205,7 @@ class MeetingBotStack(Stack):
                     "sqs:ReceiveMessage",
                     "sqs:DeleteMessage",
                     "sqs:GetQueueAttributes",
+                    "sqs:ChangeMessageVisibility",
                 ],
                 resources=[self._meeting_queue.queue_arn],
             )
@@ -217,6 +218,15 @@ class MeetingBotStack(Stack):
                 resources=[
                     f"arn:aws:secretsmanager:{self.region}:{self.account}:secret:{self._environment}/bot-credentials/*"
                 ],
+            )
+        )
+
+        # Permission to post to WebSocket API for real-time transcript broadcast
+        task_role.add_to_policy(
+            iam.PolicyStatement(
+                effect=iam.Effect.ALLOW,
+                actions=["execute-api:ManageConnections"],
+                resources=[f"arn:aws:execute-api:{self.region}:{self.account}:*/*/*/*"],
             )
         )
 

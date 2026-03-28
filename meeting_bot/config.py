@@ -57,6 +57,11 @@ ENABLE_TRANSCRIPTION = os.environ.get("ENABLE_TRANSCRIPTION", "true").lower() ==
 TRANSCRIBE_LANGUAGE = os.environ.get("TRANSCRIBE_LANGUAGE", "en-US")
 
 # ==============================================================================
+# WebSocket Configuration (for real-time transcript broadcast)
+# ==============================================================================
+WEBSOCKET_API_URL = os.environ.get("WEBSOCKET_API_URL", "")
+
+# ==============================================================================
 # Logging Configuration
 # ==============================================================================
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")

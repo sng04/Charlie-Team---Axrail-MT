@@ -44,6 +44,7 @@ ECS_SECURITY_GROUP = os.environ.get("ECS_SECURITY_GROUP")
 SQS_QUEUE_URL = os.environ.get("SQS_QUEUE_URL", "")
 WARM_POOL_ENABLED = os.environ.get("WARM_POOL_ENABLED", "true").lower() == "true"
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+WEBSOCKET_API_URL = os.environ.get("WEBSOCKET_API_URL", "")
 
 
 def _get_user_context(event: dict) -> tuple:
@@ -153,6 +154,7 @@ def _send_to_warm_pool(
             "project_id": project_id,
             "credential_id": credential_id,
             "meeting_url": meeting_link,
+            "websocket_api_url": WEBSOCKET_API_URL,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -206,6 +208,7 @@ def _start_meeting_bot(
                             {"name": "MEETING_URL", "value": meeting_link},
                             {"name": "ENVIRONMENT", "value": ENVIRONMENT},
                             {"name": "WARM_POOL_MODE", "value": "false"},
+                            {"name": "WEBSOCKET_API_URL", "value": WEBSOCKET_API_URL},
                         ],
                     }
                 ]
