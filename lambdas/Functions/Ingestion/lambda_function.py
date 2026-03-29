@@ -210,14 +210,17 @@ def _update_kb_document_status(s3_key: str, status: str) -> None:
         return
     try:
         from datetime import datetime, timezone
-        from boto3.dynamodb.conditions import Attr
+        from boto3.dynamodb.conditions import Key as DDBKey, Attr
+
+        project_id = _extract_project_id(s3_key)
+        file_name = s3_key.split("/")[-1]
 
         dynamodb = boto3.resource("dynamodb")
         table = dynamodb.Table(KB_DOCUMENTS_TABLE_NAME)
-        # Scan for the document with this s3_key (small table, acceptable)
-        resp = table.scan(
-            FilterExpression=Attr("s3_key").eq(s3_key),
-            Limit=1,
+        resp = table.query(
+            IndexName="project-index",
+            KeyConditionExpression=DDBKey("project_id").eq(project_id),
+            FilterExpression=Attr("file_name").eq(file_name),
         )
         items = resp.get("Items", [])
         if items:
@@ -230,8 +233,8 @@ def _update_kb_document_status(s3_key: str, status: str) -> None:
                 ExpressionAttributeValues={":s": status, ":u": now},
             )
             logger.info("Updated KB document status", extra={"document_id": doc_id, "status": status})
-    except Exception:
-        logger.warning("Failed to update KB document status", extra={"s3_key": s3_key})
+    except Exception as exc:
+        logger.warning("Failed to update KB document status", extra={"s3_key": s3_key, "error": str(exc)})
 
 
 # ------------------------------------------------------------------

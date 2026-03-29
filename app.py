@@ -9,6 +9,7 @@ from stack_cdk.meeting_bot_stack import MeetingBotStack
 from stack_cdk.lambda_stack import LambdaStack
 from stack_cdk.api_services_stack import ApiServicesStack
 from stack_cdk.bedrock_agent_stack import BedrockAgentStack
+from stack_cdk.security_verification_stack import SecurityVerificationStack
 from stack_cdk.environment import get_environment
 
 
@@ -89,5 +90,18 @@ bedrock_stack = BedrockAgentStack(
     f"AXRAIL-BedrockAgent-{environment}",
     env=env_us_east_1,
 )
+
+# Security agent domain-verification file (deployed to existing frontend infra)
+frontend_bucket = env_config.get("frontend_bucket_name", "")
+cf_distribution_id = env_config.get("cloudfront_distribution_id", "")
+if frontend_bucket and cf_distribution_id:
+    SecurityVerificationStack(
+        app,
+        f"AXRAIL-SecurityVerification-{environment}",
+        env_name=environment,
+        frontend_bucket_name=frontend_bucket,
+        cloudfront_distribution_id=cf_distribution_id,
+        env=env,
+    )
 
 app.synth()

@@ -28,6 +28,9 @@ ENVIRONMENTS = {
         "strands_agent_timeout": 120,
         "ingestion_memory": 512,
         "gap_scheduler_rate": "rate(5 minutes)",
+        # Frontend / CloudFront config
+        "frontend_bucket_name": "meetagentfrontend-sitebucket397a1860-faljsv4qc0to",
+        "cloudfront_distribution_id": "E2RLR03PHFYGN1",
     },
     "staging": {
         "account": os.getenv("CDK_DEFAULT_ACCOUNT"),
@@ -54,6 +57,9 @@ ENVIRONMENTS = {
         "strands_agent_timeout": 120,
         "ingestion_memory": 512,
         "gap_scheduler_rate": "rate(5 minutes)",
+        # Frontend / CloudFront config
+        "frontend_bucket_name": "",
+        "cloudfront_distribution_id": "",
     },
     "prod": {
         "account": os.getenv("CDK_DEFAULT_ACCOUNT"),
@@ -80,6 +86,9 @@ ENVIRONMENTS = {
         "strands_agent_timeout": 120,
         "ingestion_memory": 1024,
         "gap_scheduler_rate": "rate(5 minutes)",
+        # Frontend / CloudFront config
+        "frontend_bucket_name": "",
+        "cloudfront_distribution_id": "",
     },
 }
 
