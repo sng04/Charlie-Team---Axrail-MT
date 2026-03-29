@@ -20,6 +20,25 @@ tracer = Tracer()
 dynamodb = boto3.resource("dynamodb")
 projects_table = dynamodb.Table(os.environ.get("PROJECTS_TABLE"))
 project_users_table = dynamodb.Table(os.environ.get("PROJECT_USERS_TABLE"))
+agents_table = dynamodb.Table(os.environ.get("AGENTS_TABLE_NAME", ""))
+
+
+def _enrich_with_agent_name(project: dict) -> dict:
+    """Add agent_name to a project dict by looking up the Agents table."""
+    agent_id = project.get("agent_id")
+    if not agent_id or not agents_table.table_name:
+        project["agent_name"] = None
+        return project
+    try:
+        resp = agents_table.get_item(
+            Key={"agent_id": agent_id},
+            ProjectionExpression="agent_name",
+        )
+        item = resp.get("Item")
+        project["agent_name"] = item.get("agent_name") if item else None
+    except Exception:
+        project["agent_name"] = None
+    return project
 
 
 def _get_pagination_params(event: dict) -> tuple:
@@ -73,16 +92,17 @@ def lambda_handler(event, context):
             
             response = projects_table.scan(**scan_kwargs)
             
+            items = [_enrich_with_agent_name(p) for p in response.get("Items", [])]
             result = {
-                "items": response.get("Items", []),
-                "count": response.get("Count", 0),
+                "items": items,
+                "count": len(items),
             }
             
             if "LastEvaluatedKey" in response:
                 result["lastKey"] = response["LastEvaluatedKey"]["project_id"]
         else:
             project_ids = _get_user_assigned_projects(user_id)
-            items = _get_projects_by_ids(project_ids)
+            items = [_enrich_with_agent_name(p) for p in _get_projects_by_ids(project_ids)]
             
             result = {
                 "items": items,

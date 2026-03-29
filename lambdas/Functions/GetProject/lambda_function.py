@@ -21,6 +21,25 @@ tracer = Tracer()
 dynamodb = boto3.resource("dynamodb")
 projects_table = dynamodb.Table(os.environ.get("PROJECTS_TABLE"))
 project_users_table = dynamodb.Table(os.environ.get("PROJECT_USERS_TABLE"))
+agents_table = dynamodb.Table(os.environ.get("AGENTS_TABLE_NAME", ""))
+
+
+def _enrich_with_agent_name(project: dict) -> dict:
+    """Add agent_name to a project dict by looking up the Agents table."""
+    agent_id = project.get("agent_id")
+    if not agent_id or not agents_table.table_name:
+        project["agent_name"] = None
+        return project
+    try:
+        resp = agents_table.get_item(
+            Key={"agent_id": agent_id},
+            ProjectionExpression="agent_name",
+        )
+        item = resp.get("Item")
+        project["agent_name"] = item.get("agent_name") if item else None
+    except Exception:
+        project["agent_name"] = None
+    return project
 
 
 def _get_project_id(event: dict) -> str:
@@ -65,7 +84,7 @@ def lambda_handler(event, context):
         if "Item" not in response:
             raise NotFoundError(f"Project {project_id} not found")
         
-        return createResponse(200, "Project retrieved successfully", response["Item"])
+        return createResponse(200, "Project retrieved successfully", _enrich_with_agent_name(response["Item"]))
     except BadRequestError as e:
         logger.warning(f"Bad request: {e}")
         return createResponse(400, str(e))
