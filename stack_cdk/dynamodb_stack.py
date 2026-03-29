@@ -32,6 +32,7 @@ class DynamoDBStack(Stack):
         self._create_skills_table()
         self._create_agent_skills_table()
         self._create_gap_analysis_results_table()
+        self._create_kb_documents_table()
         # OpenSearch
         self._create_opensearch_domain()
         self._create_exports()
@@ -422,6 +423,29 @@ class DynamoDBStack(Stack):
             point_in_time_recovery=self.env_config.get("point_in_time_recovery", False),
         )
 
+    def _create_kb_documents_table(self) -> None:
+        """Create KbDocuments table for tracking knowledge base uploads."""
+        self.kb_documents_table = dynamodb.Table(
+            self,
+            "KbDocumentsTable",
+            table_name=f"{self.env_name}-KbDocuments",
+            partition_key=dynamodb.Attribute(
+                name="document_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
+        )
+
+        self.kb_documents_table.add_global_secondary_index(
+            index_name="project-index",
+            partition_key=dynamodb.Attribute(
+                name="project_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
     def _create_opensearch_domain(self) -> None:
         """Create OpenSearch domain for vector storage (KB and skills)."""
         self.opensearch_domain = opensearch.Domain(
@@ -639,6 +663,19 @@ class DynamoDBStack(Stack):
             "GapAnalysisResultsTableArn",
             value=self.gap_analysis_results_table.table_arn,
             export_name=f"AXRAIL-GapAnalysisResultsTableArn-{self.env_name}",
+        )
+
+        CfnOutput(
+            self,
+            "KbDocumentsTableName",
+            value=self.kb_documents_table.table_name,
+            export_name=f"AXRAIL-KbDocumentsTableName-{self.env_name}",
+        )
+        CfnOutput(
+            self,
+            "KbDocumentsTableArn",
+            value=self.kb_documents_table.table_arn,
+            export_name=f"AXRAIL-KbDocumentsTableArn-{self.env_name}",
         )
 
         # OpenSearch exports

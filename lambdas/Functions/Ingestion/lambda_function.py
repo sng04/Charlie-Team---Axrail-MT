@@ -25,6 +25,7 @@ OPENSEARCH_ENDPOINT = os.environ.get("OPENSEARCH_ENDPOINT", "")
 INDEX_NAME = os.environ.get("INDEX_NAME", "knowledge-vectors")
 PROJECT_ID = os.environ.get("PROJECT_ID", "default-project")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
+KB_DOCUMENTS_TABLE_NAME = os.environ.get("KB_DOCUMENTS_TABLE_NAME", "")
 
 MAX_RETRIES = 3
 INITIAL_BACKOFF = 1  # seconds
@@ -203,6 +204,36 @@ def _determine_doc_type(key: str) -> str:
     return "user_upload"
 
 
+def _update_kb_document_status(s3_key: str, status: str) -> None:
+    """Update the KbDocuments table status for a document matching this S3 key."""
+    if not KB_DOCUMENTS_TABLE_NAME:
+        return
+    try:
+        from datetime import datetime, timezone
+        from boto3.dynamodb.conditions import Attr
+
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(KB_DOCUMENTS_TABLE_NAME)
+        # Scan for the document with this s3_key (small table, acceptable)
+        resp = table.scan(
+            FilterExpression=Attr("s3_key").eq(s3_key),
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        if items:
+            doc_id = items[0]["document_id"]
+            now = datetime.now(timezone.utc).isoformat()
+            table.update_item(
+                Key={"document_id": doc_id},
+                UpdateExpression="SET #status = :s, updated_at = :u",
+                ExpressionAttributeNames={"#status": "status"},
+                ExpressionAttributeValues={":s": status, ":u": now},
+            )
+            logger.info("Updated KB document status", extra={"document_id": doc_id, "status": status})
+    except Exception:
+        logger.warning("Failed to update KB document status", extra={"s3_key": s3_key})
+
+
 # ------------------------------------------------------------------
 # Handler
 # ------------------------------------------------------------------
@@ -250,6 +281,9 @@ def lambda_handler(event, context):
                 "Indexed chunks",
                 extra={"chunk_count": len(chunks), "key": key, "index": INDEX_NAME},
             )
+
+            # Update KB document status to active if tracked in DynamoDB
+            _update_kb_document_status(key, "active")
 
         except Exception:
             logger.exception("Failed to process S3 object", extra={"bucket": bucket, "key": key})

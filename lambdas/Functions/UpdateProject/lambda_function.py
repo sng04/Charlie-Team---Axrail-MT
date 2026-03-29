@@ -73,7 +73,7 @@ def lambda_handler(event, context):
         if not data:
             raise BadRequestError("No update data provided")
 
-        allowed_fields = ["name", "description", "email", "s3_arn", "bot_credential_id"]
+        allowed_fields = ["name", "description", "email", "s3_arn", "bot_credential_id", "agent_id"]
         update_data = {}
 
         for key in allowed_fields:

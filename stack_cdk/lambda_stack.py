@@ -9,6 +9,7 @@ from aws_cdk import (
     aws_events_targets as targets,
     aws_s3 as s3,
     aws_apigatewayv2 as apigwv2,
+    aws_ssm as ssm,
     custom_resources as cr,
     CfnOutput,
 )
@@ -16,7 +17,6 @@ from constructs import Construct
 
 from stack_cdk.dynamodb_stack import DynamoDBStack
 from stack_cdk.cognito_stack import CognitoStack
-from stack_cdk.meeting_bot_stack import MeetingBotStack
 
 
 class LambdaStack(Stack):
@@ -29,7 +29,6 @@ class LambdaStack(Stack):
         env_name: str,
         dynamodb_stack: DynamoDBStack,
         cognito_stack: CognitoStack,
-        meeting_bot_stack: MeetingBotStack,
         admin_email: str,
         admin_temp_password: str,
         env_config: dict = None,
@@ -41,9 +40,33 @@ class LambdaStack(Stack):
         self.env_config = env_config or {}
         self.dynamodb_stack = dynamodb_stack
         self.cognito_stack = cognito_stack
-        self.meeting_bot_stack = meeting_bot_stack
         self.admin_email = admin_email
         self.admin_temp_password = admin_temp_password
+
+        # Look up MeetingBot values from SSM (avoids cross-stack export issues)
+        # Uses value_for_string_parameter which resolves at deploy time via
+        # CloudFormation Fn::Ref, not at synth time like value_from_lookup.
+        self._ecs_task_definition_arn = ssm.StringParameter.value_for_string_parameter(
+            self, f"/axrail/{env_name}/task-definition-arn"
+        )
+        self._ecs_cluster_arn = ssm.StringParameter.value_for_string_parameter(
+            self, f"/axrail/{env_name}/cluster-arn"
+        )
+        self._ecs_cluster_name = ssm.StringParameter.value_for_string_parameter(
+            self, f"/axrail/{env_name}/cluster-name"
+        )
+        self._ecs_security_group_id = ssm.StringParameter.value_for_string_parameter(
+            self, f"/axrail/{env_name}/security-group-id"
+        )
+        self._ecs_private_subnet_ids = ssm.StringParameter.value_for_string_parameter(
+            self, f"/axrail/{env_name}/private-subnet-ids"
+        )
+        self._meeting_queue_url = ssm.StringParameter.value_for_string_parameter(
+            self, f"/axrail/{env_name}/meeting-queue-url"
+        )
+        self._meeting_queue_arn = ssm.StringParameter.value_for_string_parameter(
+            self, f"/axrail/{env_name}/meeting-queue-arn"
+        )
 
         self._create_lambda_layers()
         self._create_lambda_role()
@@ -97,8 +120,6 @@ class LambdaStack(Stack):
 
         # Publish layer ARNs to SSM so dependent stacks can import them
         # without CloudFormation cross-stack exports.
-        from aws_cdk import aws_ssm as ssm
-
         ssm.StringParameter(
             self,
             "SharedLayerArnParam",
@@ -195,8 +216,8 @@ class LambdaStack(Stack):
                     "ecs:DescribeTasks",
                 ],
                 resources=[
-                    self.meeting_bot_stack.task_definition_arn,
-                    f"arn:aws:ecs:{self.region}:{self.account}:task/{self.meeting_bot_stack.cluster.cluster_name}/*",
+                    self._ecs_task_definition_arn,
+                    f"arn:aws:ecs:{self.region}:{self.account}:task/{self._ecs_cluster_name}/*",
                 ],
             )
         )
@@ -208,7 +229,7 @@ class LambdaStack(Stack):
                 resources=["*"],
                 conditions={
                     "ArnEquals": {
-                        "ecs:cluster": self.meeting_bot_stack.cluster.cluster_arn
+                        "ecs:cluster": self._ecs_cluster_arn
                     }
                 },
             )
@@ -236,7 +257,7 @@ class LambdaStack(Stack):
                     "sqs:SendMessage",
                     "sqs:GetQueueAttributes",
                 ],
-                resources=[self.meeting_bot_stack.meeting_queue_arn],
+                resources=[self._meeting_queue_arn],
             )
         )
 
@@ -288,11 +309,11 @@ class LambdaStack(Stack):
             "SESSIONS_TABLE": self.dynamodb_stack.sessions_table.table_name,
             "TRANSCRIPTS_TABLE": self.dynamodb_stack.transcripts_table.table_name,
             "BOT_CREDENTIALS_TABLE": self.dynamodb_stack.bot_credentials_table.table_name,
-            "ECS_CLUSTER": self.meeting_bot_stack.cluster_arn,
-            "ECS_TASK_DEFINITION": self.meeting_bot_stack.task_definition_arn,
-            "ECS_SUBNETS": ",".join(self.meeting_bot_stack.private_subnet_ids),
-            "ECS_SECURITY_GROUP": self.meeting_bot_stack.security_group_id,
-            "SQS_QUEUE_URL": self.meeting_bot_stack.meeting_queue_url,
+            "ECS_CLUSTER": self._ecs_cluster_arn,
+            "ECS_TASK_DEFINITION": self._ecs_task_definition_arn,
+            "ECS_SUBNETS": self._ecs_private_subnet_ids,
+            "ECS_SECURITY_GROUP": self._ecs_security_group_id,
+            "SQS_QUEUE_URL": self._meeting_queue_url,
             "BOT_POOL_TABLE": self.dynamodb_stack.bot_pool_table.table_name,
             "WARM_POOL_ENABLED": "true",
             "ENVIRONMENT": self.env_name,
@@ -308,6 +329,7 @@ class LambdaStack(Stack):
             "TRANSCRIPTS_TABLE_NAME": self.dynamodb_stack.transcripts_table.table_name,
             "GAP_ANALYSIS_TABLE_NAME": self.dynamodb_stack.gap_analysis_results_table.table_name,
             "AGENT_SKILLS_TABLE_NAME": self.dynamodb_stack.agent_skills_table.table_name,
+            "KB_DOCUMENTS_TABLE_NAME": self.dynamodb_stack.kb_documents_table.table_name,
         }
 
     def _create_lambda_function(
@@ -432,6 +454,18 @@ class LambdaStack(Stack):
 
         self.get_project_sessions_fn = self._create_lambda_function(
             "GetProjectSessions", "lambdas/Functions/GetProjectSessions"
+        )
+
+        self.get_suggested_questions_fn = self._create_lambda_function(
+            "GetSuggestedQuestions", "lambdas/Functions/GetSuggestedQuestions"
+        )
+
+        self.get_session_summary_fn = self._create_lambda_function(
+            "GetSessionSummary", "lambdas/Functions/GetSessionSummary"
+        )
+
+        self.kb_documents_crud_fn = self._create_lambda_function(
+            "KbDocumentsCrud", "lambdas/Functions/KbDocumentsCrud"
         )
 
         # Meeting Bot functions
@@ -630,6 +664,7 @@ class LambdaStack(Stack):
             self.dynamodb_stack.skills_table,
             self.dynamodb_stack.gap_analysis_results_table,
             self.dynamodb_stack.agent_skills_table,
+            self.dynamodb_stack.kb_documents_table,
         ]:
             table.grant_read_write_data(self.lambda_role)
 
@@ -654,6 +689,17 @@ class LambdaStack(Stack):
         self.kb_bucket = s3.CfnBucket(
             self, "KbBucket",
             bucket_name=kb_bucket_name,
+            cors_configuration=s3.CfnBucket.CorsConfigurationProperty(
+                cors_rules=[
+                    s3.CfnBucket.CorsRuleProperty(
+                        allowed_headers=["*"],
+                        allowed_methods=["PUT", "POST", "GET"],
+                        allowed_origins=["*"],
+                        exposed_headers=["ETag"],
+                        max_age=3600,
+                    ),
+                ],
+            ),
             notification_configuration=s3.CfnBucket.NotificationConfigurationProperty(
                 lambda_configurations=[
                     s3.CfnBucket.LambdaConfigurationProperty(
@@ -677,10 +723,7 @@ class LambdaStack(Stack):
                     s3.CfnBucket.CorsRuleProperty(
                         allowed_headers=["*"],
                         allowed_methods=["PUT", "POST", "GET"],
-                        allowed_origins=[
-                            "http://localhost:3000",
-                            "https://d2bed2yjnef4ve.cloudfront.net",
-                        ],
+                        allowed_origins=["*"],
                         exposed_headers=["ETag"],
                         max_age=3600,
                     ),
@@ -733,6 +776,8 @@ class LambdaStack(Stack):
         self.strands_agent_fn.add_environment("KB_BUCKET_NAME", kb_bucket_name)
         self.ingestion_fn.add_environment("KB_BUCKET_NAME", kb_bucket_name)
         self.skill_ingestion_fn.add_environment("SKILLS_BUCKET_NAME", skills_bucket_name)
+        self.get_session_summary_fn.add_environment("KB_BUCKET_NAME", kb_bucket_name)
+        self.kb_documents_crud_fn.add_environment("KB_BUCKET_NAME", kb_bucket_name)
 
     def _create_websocket_api(self) -> None:
         """Create WebSocket API Gateway for StrandsAgent real-time communication."""
@@ -821,7 +866,7 @@ class LambdaStack(Stack):
             ],
             environment={
                 "BOT_POOL_TABLE": self.dynamodb_stack.bot_pool_table.table_name,
-                "ECS_CLUSTER_NAME": self.meeting_bot_stack.cluster.cluster_name,
+                "ECS_CLUSTER_NAME": self._ecs_cluster_name,
                 "POWERTOOLS_SERVICE_NAME": "axrail-ecs-handler",
                 "LOG_LEVEL": "INFO",
             },
@@ -839,7 +884,7 @@ class LambdaStack(Stack):
                 source=["aws.ecs"],
                 detail_type=["ECS Task State Change"],
                 detail={
-                    "clusterArn": [self.meeting_bot_stack.cluster.cluster_arn],
+                    "clusterArn": [self._ecs_cluster_arn],
                     "lastStatus": ["STOPPED"],
                 },
             ),

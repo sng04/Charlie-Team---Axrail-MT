@@ -59,6 +59,7 @@ class ApiServicesStack(Stack):
         self._create_agent_skill_routes()
         self._create_personality_routes()
         self._create_skill_routes()
+        self._create_kb_document_routes()
         self._create_qa_routes()
         self._create_exports()
 
@@ -391,6 +392,24 @@ class ApiServicesStack(Stack):
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
         
+        # GET /sessions/{sessionId}/suggested-questions
+        suggested_questions_resource = session_resource.add_resource("suggested-questions")
+        suggested_questions_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.get_suggested_questions_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # GET /sessions/{sessionId}/summary
+        summary_resource = session_resource.add_resource("summary")
+        summary_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.get_session_summary_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+        
         # GET /projects/{projectId}/sessions - Get sessions for project (authenticated users)
         projects_resource = self.api.root.get_resource("projects")
         project_resource = projects_resource.get_resource("{projectId}")
@@ -673,6 +692,56 @@ class ApiServicesStack(Stack):
         replace_doc_resource.add_method(
             "POST",
             apigw.LambdaIntegration(self.lambda_stack.skills_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+    def _create_kb_document_routes(self) -> None:
+        """Create KB Document CRUD API routes under /projects/{projectId}/kb-documents."""
+        projects_resource = self.api.root.get_resource("projects")
+        project_resource = projects_resource.get_resource("{projectId}")
+
+        kb_docs_resource = project_resource.add_resource("kb-documents")
+
+        # GET /projects/{projectId}/kb-documents - List KB documents
+        kb_docs_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.kb_documents_crud_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # POST /projects/{projectId}/kb-documents - Create KB document
+        kb_docs_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.kb_documents_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        kb_doc_resource = kb_docs_resource.add_resource("{documentId}")
+
+        # GET /projects/{projectId}/kb-documents/{documentId} - Get single document
+        kb_doc_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.kb_documents_crud_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # DELETE /projects/{projectId}/kb-documents/{documentId} - Delete document
+        kb_doc_resource.add_method(
+            "DELETE",
+            apigw.LambdaIntegration(self.lambda_stack.kb_documents_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # POST /projects/{projectId}/kb-documents/{documentId}/replace - Replace file
+        replace_resource = kb_doc_resource.add_resource("replace")
+        replace_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.kb_documents_crud_fn),
             authorizer=self.admin_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )

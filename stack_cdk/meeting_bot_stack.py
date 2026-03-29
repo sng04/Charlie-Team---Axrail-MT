@@ -15,6 +15,7 @@ from aws_cdk import (
     aws_iam as iam,
     aws_logs as logs,
     aws_sqs as sqs,
+    aws_ssm as ssm,
 )
 from constructs import Construct
 
@@ -280,6 +281,50 @@ class MeetingBotStack(Stack):
         )
         CfnOutput(self, "MeetingQueueUrl", value=self._meeting_queue.queue_url)
         CfnOutput(self, "MeetingQueueArn", value=self._meeting_queue.queue_arn)
+
+        # Store volatile values in SSM to avoid cross-stack export issues
+        ssm.StringParameter(
+            self, "TaskDefinitionArnParam",
+            parameter_name=f"/axrail/{self._environment}/task-definition-arn",
+            string_value=self._task_definition.task_definition_arn,
+            description="ECS task definition ARN for meeting bot",
+        )
+        ssm.StringParameter(
+            self, "ClusterArnParam",
+            parameter_name=f"/axrail/{self._environment}/cluster-arn",
+            string_value=self._cluster.cluster_arn,
+            description="ECS cluster ARN for meeting bot",
+        )
+        ssm.StringParameter(
+            self, "ClusterNameParam",
+            parameter_name=f"/axrail/{self._environment}/cluster-name",
+            string_value=self._cluster.cluster_name,
+            description="ECS cluster name for meeting bot",
+        )
+        ssm.StringParameter(
+            self, "SecurityGroupIdParam",
+            parameter_name=f"/axrail/{self._environment}/security-group-id",
+            string_value=self._task_sg.security_group_id,
+            description="Security group ID for meeting bot tasks",
+        )
+        ssm.StringParameter(
+            self, "PrivateSubnetIdsParam",
+            parameter_name=f"/axrail/{self._environment}/private-subnet-ids",
+            string_value=",".join([s.subnet_id for s in self._vpc.private_subnets]),
+            description="Private subnet IDs for meeting bot tasks",
+        )
+        ssm.StringParameter(
+            self, "MeetingQueueUrlParam",
+            parameter_name=f"/axrail/{self._environment}/meeting-queue-url",
+            string_value=self._meeting_queue.queue_url,
+            description="SQS queue URL for meeting requests",
+        )
+        ssm.StringParameter(
+            self, "MeetingQueueArnParam",
+            parameter_name=f"/axrail/{self._environment}/meeting-queue-arn",
+            string_value=self._meeting_queue.queue_arn,
+            description="SQS queue ARN for meeting requests",
+        )
 
     @property
     def cluster(self) -> ecs.Cluster:

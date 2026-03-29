@@ -8,5 +8,12 @@
     "ap-southeast-1a",
     "ap-southeast-1b",
     "ap-southeast-1c"
-  ]
+  ],
+  "ssm:account=848332098006:parameterName=/axrail/dev/task-definition-arn:region=ap-southeast-1": "arn:aws:ecs:ap-southeast-1:848332098006:task-definition/dev-meeting-bot:1",
+  "ssm:account=848332098006:parameterName=/axrail/dev/cluster-arn:region=ap-southeast-1": "arn:aws:ecs:ap-southeast-1:848332098006:cluster/dev-meeting-bot",
+  "ssm:account=848332098006:parameterName=/axrail/dev/cluster-name:region=ap-southeast-1": "dev-meeting-bot",
+  "ssm:account=848332098006:parameterName=/axrail/dev/security-group-id:region=ap-southeast-1": "sg-06846b39efbd22c02",
+  "ssm:account=848332098006:parameterName=/axrail/dev/private-subnet-ids:region=ap-southeast-1": "subnet-0f230f4400384ea9a,subnet-0c9ae3af52ffa8c06",
+  "ssm:account=848332098006:parameterName=/axrail/dev/meeting-queue-url:region=ap-southeast-1": "https://sqs.ap-southeast-1.amazonaws.com/848332098006/dev-meeting-requests",
+  "ssm:account=848332098006:parameterName=/axrail/dev/meeting-queue-arn:region=ap-southeast-1": "arn:aws:sqs:ap-southeast-1:848332098006:dev-meeting-requests"
 }

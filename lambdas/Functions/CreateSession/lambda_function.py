@@ -14,6 +14,7 @@ Validates that project has a verified and active bot credential before starting 
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -23,6 +24,11 @@ from boto3.dynamodb.conditions import Key
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError, UnauthorizedError
+
+QA_PAIRS_TABLE_NAME = os.environ.get("QA_PAIRS_TABLE_NAME", "")
+SUGGESTED_QUESTIONS_TABLE_NAME = os.environ.get("SUGGESTED_QUESTIONS_TABLE_NAME", "")
+GAP_ANALYSIS_TABLE_NAME = os.environ.get("GAP_ANALYSIS_TABLE_NAME", "")
+BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 
 logger = Logger()
 tracer = Tracer()
@@ -229,6 +235,104 @@ def _start_meeting_bot(
         return None
 
 
+def _generate_suggested_questions(session_id: str, project_id: str) -> list:
+    """Generate suggested questions from previous session history."""
+    try:
+        qa_table = dynamodb.Table(QA_PAIRS_TABLE_NAME)
+        gap_table = dynamodb.Table(GAP_ANALYSIS_TABLE_NAME)
+        sq_table = dynamodb.Table(SUGGESTED_QUESTIONS_TABLE_NAME)
+
+        # Get previous sessions for this project
+        prev_sessions = sessions_table.query(
+            IndexName="project-index",
+            KeyConditionExpression=Key("project_id").eq(project_id),
+        ).get("Items", [])
+
+        # Exclude the current session
+        prev_session_ids = [s["session_id"] for s in prev_sessions if s["session_id"] != session_id]
+        if not prev_session_ids:
+            return []
+
+        # Collect QA pairs from previous sessions (max 10)
+        qa_pairs = []
+        for sid in prev_session_ids[:5]:
+            resp = qa_table.query(
+                IndexName="session-index",
+                KeyConditionExpression=Key("session_id").eq(sid),
+                Limit=5,
+            )
+            qa_pairs.extend(resp.get("Items", []))
+        qa_pairs = qa_pairs[:10]
+
+        # Collect gap analysis results
+        gaps = []
+        for sid in prev_session_ids[:3]:
+            resp = gap_table.get_item(Key={"session_id": sid})
+            if "Item" in resp:
+                gaps.append(resp["Item"])
+
+        if not qa_pairs and not gaps:
+            return []
+
+        # Build prompt
+        history_text = "Previous meeting Q&A:\n"
+        for qa in qa_pairs:
+            history_text += f"- Q: {qa.get('question', '')}\n  A: {qa.get('answer', '')[:200]}\n"
+
+        if gaps:
+            history_text += "\nKnowledge gaps identified:\n"
+            for g in gaps:
+                for gap in g.get("gaps", [])[:3]:
+                    history_text += f"- {gap.get('topic', '')}: {gap.get('description', '')[:150]}\n"
+
+        prompt = (
+            f"Based on this meeting history for a project, generate 3-5 suggested questions "
+            f"that the meeting host should ask the client in the next meeting. "
+            f"Focus on unresolved topics, knowledge gaps, and follow-up items.\n\n"
+            f"{history_text}\n"
+            f"Return ONLY a JSON array of question strings, no other text. Example:\n"
+            f'["Question 1?", "Question 2?", "Question 3?"]'
+        )
+
+        bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
+        response = bedrock.converse(
+            modelId="amazon.nova-pro-v1:0",
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+        )
+
+        output_text = ""
+        for block in response.get("output", {}).get("message", {}).get("content", []):
+            if "text" in block:
+                output_text += block["text"]
+
+        # Parse JSON array from response
+        match = re.search(r'\[.*\]', output_text, re.DOTALL)
+        if not match:
+            return []
+        questions = json.loads(match.group())
+        if not isinstance(questions, list):
+            return []
+        questions = [q for q in questions if isinstance(q, str) and q.strip()][:5]
+
+        # Store in SuggestedQuestions table
+        now = datetime.now(timezone.utc).isoformat()
+        for q_text in questions:
+            sq_table.put_item(Item={
+                "question_id": str(uuid.uuid4()),
+                "session_id": session_id,
+                "question_text": q_text,
+                "created_at": now,
+                "matched": False,
+            })
+
+        logger.info(f"Generated {len(questions)} suggested questions for session {session_id}")
+        return questions
+
+    except Exception:
+        logger.exception("Failed to generate suggested questions")
+        return []
+
+
 @tracer.capture_lambda_handler
 def lambda_handler(event, context):
     try:
@@ -294,6 +398,11 @@ def lambda_handler(event, context):
                     item["dispatch_mode"] = "cold_start"
 
         sessions_table.put_item(Item=item)
+
+        # Generate suggested questions from project history (non-blocking)
+        suggested_questions = _generate_suggested_questions(session_id, data["project_id"])
+        if suggested_questions:
+            item["suggested_questions"] = suggested_questions
 
         return createResponse(200, "Session created successfully", item)
     except UnauthorizedError as e:
