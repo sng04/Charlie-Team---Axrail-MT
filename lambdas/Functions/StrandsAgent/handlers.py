@@ -127,6 +127,8 @@ def _handle_send_message(body: dict, connection_id: str) -> dict:
     session_id = body.get("session_id", "default-session")
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    if project_id == "default-project" and session_id != "default-session":
+        project_id = _lookup_project_id(session_id)
     skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     try:
@@ -177,6 +179,8 @@ def _handle_detect_question(body: dict, connection_id: str) -> dict:
     session_id = body.get("session_id", "default-session")
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    if project_id == "default-project" and session_id != "default-session":
+        project_id = _lookup_project_id(session_id)
     skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     try:
@@ -230,6 +234,8 @@ def _handle_extract_qa_pair(body: dict, connection_id: str) -> dict:
     session_id = body.get("session_id", "default-session")
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    if project_id == "default-project" and session_id != "default-session":
+        project_id = _lookup_project_id(session_id)
 
     try:
         model = BedrockModel(
@@ -298,6 +304,9 @@ def _handle_analyze_gaps(body: dict, connection_id: str) -> dict:
 
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    # Guard against stale in-memory cache returning default-project
+    if project_id == "default-project" and session_id:
+        project_id = _lookup_project_id(session_id)
     skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     try:
@@ -362,6 +371,9 @@ def _handle_end_meeting(body: dict, connection_id: str) -> dict:
 
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    # Guard against stale in-memory cache returning default-project
+    if project_id == "default-project" and session_id:
+        project_id = _lookup_project_id(session_id)
     skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     _post_to_connection(connection_id, {
@@ -380,7 +392,7 @@ def _handle_end_meeting(body: dict, connection_id: str) -> dict:
         agent = Agent(
             model=model,
             system_prompt=system_prompt,
-            tools=[get_session_transcript, get_session_qa_pairs, get_session_gaps, save_summary_to_s3, search_agent_skills],
+            tools=[get_session_transcript, get_session_qa_pairs, get_session_gaps, search_agent_skills],
         )
         enriched = (
             f"[Context: session_id={session_id}, project_id={project_id}]\n"
@@ -390,6 +402,10 @@ def _handle_end_meeting(body: dict, connection_id: str) -> dict:
         )
         result = agent(enriched)
         summary_markdown = str(result)
+
+        # Always save to S3 deterministically instead of relying on the agent
+        save_result = save_summary_to_s3(summary_markdown, session_id, project_id)
+        logger.info("Summary save result: %s", save_result)
 
         _post_to_connection(connection_id, {
             "type": "meetingSummary",
@@ -428,6 +444,9 @@ def _handle_retro_analysis(body: dict, connection_id: str) -> dict:
 
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
+    # Guard against stale in-memory cache returning default-project
+    if project_id == "default-project" and session_id:
+        project_id = _lookup_project_id(session_id)
     skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     _post_to_connection(connection_id, {

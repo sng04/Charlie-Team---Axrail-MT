@@ -21,6 +21,7 @@ BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 TRANSCRIPTS_TABLE_NAME = os.environ.get("TRANSCRIPTS_TABLE_NAME", "")
 QA_PAIRS_TABLE_NAME = os.environ.get("QA_PAIRS_TABLE_NAME", "")
 KB_BUCKET_NAME = os.environ.get("KB_BUCKET_NAME", "")
+KB_DOCUMENTS_TABLE_NAME = os.environ.get("KB_DOCUMENTS_TABLE_NAME", "")
 SKILLS_TABLE_NAME = os.environ.get("SKILLS_TABLE_NAME", "")
 GAP_ANALYSIS_TABLE_NAME = os.environ.get("GAP_ANALYSIS_TABLE_NAME", "")
 
@@ -240,12 +241,56 @@ def save_summary_to_s3(summary_markdown: str, session_id: str, project_id: str) 
         return "Error: KB_BUCKET_NAME environment variable not configured"
     s3_key = f"{project_id}/summaries/{session_id}.md"
     try:
+        body = summary_markdown.encode("utf-8")
         _get_s3_client().put_object(
             Bucket=KB_BUCKET_NAME,
             Key=s3_key,
-            Body=summary_markdown.encode("utf-8"),
+            Body=body,
             ContentType="text/markdown",
         )
+        # Create a KbDocuments record so the summary appears in the KB file list
+        if KB_DOCUMENTS_TABLE_NAME:
+            try:
+                global _dynamodb
+                if _dynamodb is None:
+                    _dynamodb = boto3.resource("dynamodb")
+                now = datetime.now(timezone.utc).isoformat()
+                # Look up session name for a readable file_name
+                session_name = None
+                sessions_table_name = os.environ.get("SESSIONS_TABLE_NAME", "")
+                if sessions_table_name:
+                    try:
+                        resp = _dynamodb.Table(sessions_table_name).get_item(
+                            Key={"session_id": session_id},
+                            ProjectionExpression="#n",
+                            ExpressionAttributeNames={"#n": "name"},
+                        )
+                        session_name = resp.get("Item", {}).get("name")
+                    except Exception:
+                        pass
+                if session_name:
+                    # Sanitize for use as filename
+                    safe_name = "".join(c if c.isalnum() or c in " -_" else "" for c in session_name).strip()
+                    display_name = f"Summary - {safe_name}.md"
+                else:
+                    display_name = f"meeting-summary-{session_id[:8]}.md"
+                _dynamodb.Table(KB_DOCUMENTS_TABLE_NAME).put_item(Item={
+                    "document_id": str(uuid.uuid4()),
+                    "project_id": project_id,
+                    "file_name": display_name,
+                    "description": f"Auto-generated meeting summary for session {session_id}",
+                    "s3_key": s3_key,
+                    "file_type": "md",
+                    "file_size": len(body),
+                    "status": "active",
+                    "doc_type": "meeting_summary",
+                    "session_id": session_id,
+                    "created_at": now,
+                    "updated_at": now,
+                })
+                logger.info("Created KbDocuments record for summary", extra={"s3_key": s3_key})
+            except Exception:
+                logger.warning("Failed to create KbDocuments record for summary", extra={"s3_key": s3_key})
         return f"Summary saved to s3://{KB_BUCKET_NAME}/{s3_key}"
     except Exception as exc:
         logger.exception("Failed to save summary to S3")

@@ -60,6 +60,7 @@ class ApiServicesStack(Stack):
         self._create_personality_routes()
         self._create_skill_routes()
         self._create_kb_document_routes()
+        self._create_file_download_routes()
         self._create_qa_routes()
         self._create_exports()
 
@@ -743,6 +744,18 @@ class ApiServicesStack(Stack):
             "POST",
             apigw.LambdaIntegration(self.lambda_stack.kb_documents_crud_fn),
             authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+    def _create_file_download_routes(self) -> None:
+        """Create file download route: GET /files/download?bucket=...&key=..."""
+        files_resource = self.api.root.add_resource("files")
+        download_resource = files_resource.add_resource("download")
+
+        download_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.file_download_fn),
+            authorizer=self.auth_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
 

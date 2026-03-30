@@ -468,6 +468,10 @@ class LambdaStack(Stack):
             "KbDocumentsCrud", "lambdas/Functions/KbDocumentsCrud"
         )
 
+        self.file_download_fn = self._create_lambda_function(
+            "FileDownload", "lambdas/Functions/FileDownload"
+        )
+
         # Meeting Bot functions
         self.get_session_transcripts_fn = self._create_lambda_function(
             "GetSessionTranscripts", "lambdas/Functions/GetSessionTranscripts"
@@ -778,6 +782,8 @@ class LambdaStack(Stack):
         self.skill_ingestion_fn.add_environment("SKILLS_BUCKET_NAME", skills_bucket_name)
         self.get_session_summary_fn.add_environment("KB_BUCKET_NAME", kb_bucket_name)
         self.kb_documents_crud_fn.add_environment("KB_BUCKET_NAME", kb_bucket_name)
+        self.file_download_fn.add_environment("KB_BUCKET_NAME", kb_bucket_name)
+        self.file_download_fn.add_environment("SKILLS_BUCKET_NAME", skills_bucket_name)
 
     def _create_websocket_api(self) -> None:
         """Create WebSocket API Gateway for StrandsAgent real-time communication."""

@@ -1,8 +1,8 @@
-"""Stack to deploy securityagent.json to the existing frontend S3 bucket.
+"""Stack to deploy AWS Security Agent verification files to the existing frontend S3 bucket.
 
-This places the AWS Security Agent domain-verification file into the S3
-bucket that serves as the origin for the existing CloudFront distribution,
-then invalidates the CloudFront cache so the file is immediately accessible.
+This places the verification files into the S3 bucket that serves as the
+origin for the existing CloudFront distribution, then invalidates the
+CloudFront cache so the files are immediately accessible.
 """
 
 import json
@@ -16,7 +16,7 @@ from aws_cdk import (
 from constructs import Construct
 
 VERIFICATION_PAYLOAD = json.dumps(
-    {"aws-securityagent-domain-verification": "jP2oeFgO9BqJJGZmVvkSXA"},
+    {"tokens": ["jP2oeFgO9BqJJGZmVvkSXA"]},
     separators=(",", ":"),
 )
 
@@ -66,4 +66,23 @@ class SecurityVerificationStack(Stack):
             # Invalidate CloudFront cache for this path after deployment
             distribution=distribution,
             distribution_paths=["/securityagent.json"],
+        )
+
+        # Deploy the .well-known verification file
+        s3deploy.BucketDeployment(
+            self,
+            "SecurityAgentWellKnownFile",
+            sources=[
+                s3deploy.Source.data(
+                    ".well-known/aws/securityagent-domain-verification.json",
+                    VERIFICATION_PAYLOAD,
+                ),
+            ],
+            destination_bucket=bucket,
+            prune=False,
+            distribution=distribution,
+            distribution_paths=[
+                "/securityagent.json",
+                "/.well-known/aws/securityagent-domain-verification.json",
+            ],
         )

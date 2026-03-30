@@ -1,0 +1,226 @@
+[
+  {
+    "speaker": "spk_0",
+    "text": "Hey Marcus, thanks for hopping on. Just a quick check-in on the NovaPay rollout.",
+    "start_time": 5.2,
+    "end_time": 10.1,
+    "confidence": 0.96,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "Sure thing Alex. We went live at the first 10 pilot stores last Friday.",
+    "start_time": 11.0,
+    "end_time": 16.3,
+    "confidence": 0.93,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Nice. How's the transaction volume looking so far?",
+    "start_time": 17.5,
+    "end_time": 20.2,
+    "confidence": 0.97,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "We processed about 4200 transactions over the weekend. Average ticket size is around 47 dollars which is in line with what we expected.",
+    "start_time": 21.0,
+    "end_time": 29.8,
+    "confidence": 0.91,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "That's solid. Any issues with the POS integration at those stores?",
+    "start_time": 30.5,
+    "end_time": 34.1,
+    "confidence": 0.95,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "We had a minor hiccup with the Square terminals at two locations. The contactless reader wasn't picking up Apple Pay consistently.",
+    "start_time": 35.0,
+    "end_time": 43.2,
+    "confidence": 0.89,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Got it. That's usually a firmware thing. We can push an OTA update tonight. Did your team log a ticket for that?",
+    "start_time": 44.0,
+    "end_time": 50.5,
+    "confidence": 0.94,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "Yeah, ticket FRC-1042. The store managers flagged it Saturday morning.",
+    "start_time": 51.2,
+    "end_time": 56.0,
+    "confidence": 0.92,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Perfect, I'll escalate that today. Now, on the Shopify POS side, are those three locations syncing properly?",
+    "start_time": 57.0,
+    "end_time": 63.8,
+    "confidence": 0.95,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "Shopify is running smooth. Real-time inventory sync is working and the webhook latency is under 200 milliseconds.",
+    "start_time": 64.5,
+    "end_time": 71.3,
+    "confidence": 0.93,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Great. What about the settlement times? Are funds hitting your account within the SLA?",
+    "start_time": 72.0,
+    "end_time": 77.5,
+    "confidence": 0.96,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "Settlement has been next-day for all transactions so far. No delays. That was a big concern for our finance team so they're happy.",
+    "start_time": 78.2,
+    "end_time": 86.0,
+    "confidence": 0.91,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Good to hear. Let's talk about the wave two rollout. We're targeting the remaining 190 stores for next month right?",
+    "start_time": 87.0,
+    "end_time": 93.5,
+    "confidence": 0.94,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "That's the plan. But David wants to see the pilot data for at least two full weeks before he signs off on wave two.",
+    "start_time": 94.2,
+    "end_time": 101.0,
+    "confidence": 0.90,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Makes sense. So we're looking at wave two kickoff around mid-April?",
+    "start_time": 102.0,
+    "end_time": 106.3,
+    "confidence": 0.95,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "Yeah, April 14th is what we're penciling in. That gives us a week buffer before the spring sale.",
+    "start_time": 107.0,
+    "end_time": 113.5,
+    "confidence": 0.92,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "One thing I wanted to flag. We're releasing the new fraud detection module next week. It uses ML-based anomaly detection. Should we enable it for your pilot stores first?",
+    "start_time": 115.0,
+    "end_time": 125.2,
+    "confidence": 0.93,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "What's the false positive rate on that? We can't afford to block legitimate transactions during peak hours.",
+    "start_time": 126.0,
+    "end_time": 132.5,
+    "confidence": 0.91,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "In beta testing it's been under 0.3 percent. And it runs async so there's zero added latency to the checkout flow.",
+    "start_time": 133.2,
+    "end_time": 140.8,
+    "confidence": 0.94,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "That sounds reasonable. Let's enable it on the pilot stores and monitor for a week.",
+    "start_time": 141.5,
+    "end_time": 147.0,
+    "confidence": 0.95,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Will do. I'll coordinate with your IT team on the rollout. Any other blockers for wave two?",
+    "start_time": 148.0,
+    "end_time": 153.5,
+    "confidence": 0.96,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "Just the Salesforce CRM sync. James from IT says the API credentials haven't been provisioned yet.",
+    "start_time": 154.2,
+    "end_time": 160.8,
+    "confidence": 0.90,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Right, that was an action item from the kickoff. I'll follow up with James directly. We need that sorted before wave two.",
+    "start_time": 161.5,
+    "end_time": 168.3,
+    "confidence": 0.93,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "Agreed. Other than that, the team is happy with how things are going. The dashboard reporting is really useful.",
+    "start_time": 169.0,
+    "end_time": 175.5,
+    "confidence": 0.92,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Awesome. So to recap: I'll escalate the Apple Pay firmware fix today, enable fraud detection on pilot stores, and chase James on the Salesforce credentials.",
+    "start_time": 176.5,
+    "end_time": 186.0,
+    "confidence": 0.95,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "And on our side, David will review the two-week pilot data and give the green light for wave two by April 10th.",
+    "start_time": 187.0,
+    "end_time": 194.2,
+    "confidence": 0.93,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_0",
+    "text": "Perfect. Let's sync again next Wednesday to review the pilot metrics. Thanks Marcus.",
+    "start_time": 195.0,
+    "end_time": 200.5,
+    "confidence": 0.96,
+    "is_partial": false
+  },
+  {
+    "speaker": "spk_1",
+    "text": "Sounds good. Talk then. Thanks Alex.",
+    "start_time": 201.2,
+    "end_time": 204.0,
+    "confidence": 0.97,
+    "is_partial": false
+  }
+]
