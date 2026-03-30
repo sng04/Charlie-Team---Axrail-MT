@@ -8,7 +8,7 @@ from decimal import Decimal
 from aws_lambda_powertools import Logger
 
 from constants import MATCH_THRESHOLD, SUGGESTED_QUESTIONS_TABLE_NAME
-from helpers import _get_dynamodb, _post_to_connection
+from helpers import _get_dynamodb, _post_to_connection, _broadcast_to_session
 from tools import save_qa_pair, _generate_embedding
 
 logger = Logger(child=True)
@@ -147,17 +147,21 @@ def _check_answer_windows(
                     )
                 except Exception:
                     logger.exception("Failed to auto-save QA pair")
-                _post_to_connection(connection_id, {
+                qa_msg = {
                     "type": "qaPairAutoSaved",
                     "question": window["question_text"],
                     "answer": answer,
                     "source": "participant",
-                })
+                }
+                _post_to_connection(connection_id, qa_msg)
+                _broadcast_to_session(session_id, qa_msg, exclude_connection_id=connection_id)
             else:
-                _post_to_connection(connection_id, {
+                unanswered_msg = {
                     "type": "questionUnanswered",
                     "question": window["question_text"],
-                })
+                }
+                _post_to_connection(connection_id, unanswered_msg)
+                _broadcast_to_session(session_id, unanswered_msg, exclude_connection_id=connection_id)
             closed.append(qid)
 
     for qid in closed:
@@ -219,17 +223,21 @@ def _check_user_response_windows(
                     )
                 except Exception:
                     logger.exception("Failed to auto-save client QA pair")
-                _post_to_connection(connection_id, {
+                qa_msg = {
                     "type": "qaPairAutoSaved",
                     "question": window["question_text"],
                     "answer": answer,
                     "source": "client",
-                })
+                }
+                _post_to_connection(connection_id, qa_msg)
+                _broadcast_to_session(session_id, qa_msg, exclude_connection_id=connection_id)
             else:
-                _post_to_connection(connection_id, {
+                unanswered_msg = {
                     "type": "questionUnanswered",
                     "question": window["question_text"],
-                })
+                }
+                _post_to_connection(connection_id, unanswered_msg)
+                _broadcast_to_session(session_id, unanswered_msg, exclude_connection_id=connection_id)
             closed.append(wid)
 
     for wid in closed:

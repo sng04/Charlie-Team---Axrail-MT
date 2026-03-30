@@ -18,7 +18,7 @@ sys.path.insert(
     os.path.join(os.path.dirname(__file__), "..", "..", "lambdas", "Functions", "Ingestion"),
 )
 
-from lambda_function import chunk_text, _retry_with_backoff, _generate_embedding  # noqa: E402
+from lambda_function import chunk_text, _retry_with_backoff, _generate_embedding, _extract_text_from_file  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -131,3 +131,45 @@ class TestRetryExhaustionRaises:
                 _retry_with_backoff(mock_func)
 
         assert mock_func.call_count == 3
+
+
+class TestExtractTextFromTxtFile:
+    """Verify .txt files are decoded as UTF-8."""
+
+    def test_extract_text_from_txt_file(self) -> None:
+        content = "Hello, this is a plain text file."
+        mock_body = MagicMock()
+        mock_body.read.return_value = content.encode("utf-8")
+
+        mock_s3 = MagicMock()
+        mock_s3.get_object.return_value = {"Body": mock_body}
+
+        result = _extract_text_from_file(mock_s3, "test-bucket", "docs/readme.txt")
+        assert result == content
+
+
+class TestExtractTextFromDocxFile:
+    """Verify .docx files use python-docx Document class."""
+
+    @patch("docx.Document")
+    def test_extract_text_from_docx_file(self, mock_document_cls) -> None:
+        mock_body = MagicMock()
+        mock_body.read.return_value = b"fake-docx-bytes"
+
+        mock_s3 = MagicMock()
+        mock_s3.get_object.return_value = {"Body": mock_body}
+
+        para1 = MagicMock()
+        para1.text = "First paragraph"
+        para2 = MagicMock()
+        para2.text = "Second paragraph"
+        para_empty = MagicMock()
+        para_empty.text = "   "
+
+        mock_doc = MagicMock()
+        mock_doc.paragraphs = [para1, para2, para_empty]
+        mock_document_cls.return_value = mock_doc
+
+        result = _extract_text_from_file(mock_s3, "test-bucket", "docs/report.docx")
+        mock_document_cls.assert_called_once()
+        assert result == "First paragraph\nSecond paragraph"

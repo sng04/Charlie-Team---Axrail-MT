@@ -99,3 +99,49 @@ class TestSkillIngestion:
                 mod._update_skill_status.assert_called_with("skill-123", "active")
         finally:
             _cleanup()
+
+
+    def test_extract_text_from_txt_file(self):
+        """Verify .txt files are decoded as UTF-8."""
+        mod = _import_handler()
+        try:
+            content = "Plain text skill document."
+            mock_body = MagicMock()
+            mock_body.read.return_value = content.encode("utf-8")
+
+            mock_s3 = MagicMock()
+            mock_s3.get_object.return_value = {"Body": mock_body}
+
+            result = mod._extract_text_from_file(mock_s3, "test-skills", "skill-1/doc.txt")
+            assert result == content
+        finally:
+            _cleanup()
+
+    def test_extract_text_from_docx_file(self):
+        """Verify .docx files use python-docx Document class."""
+        mod = _import_handler()
+        try:
+            mock_body = MagicMock()
+            mock_body.read.return_value = b"fake-docx-bytes"
+
+            mock_s3 = MagicMock()
+            mock_s3.get_object.return_value = {"Body": mock_body}
+
+            para1 = MagicMock()
+            para1.text = "First paragraph"
+            para2 = MagicMock()
+            para2.text = "Second paragraph"
+            para_empty = MagicMock()
+            para_empty.text = "   "
+
+            mock_doc = MagicMock()
+            mock_doc.paragraphs = [para1, para2, para_empty]
+
+            with patch.dict(sys.modules, {"docx": MagicMock()}):
+                import docx as mock_docx_mod
+                mock_docx_mod.Document.return_value = mock_doc
+
+                result = mod._extract_text_from_file(mock_s3, "test-skills", "skill-1/doc.docx")
+                assert result == "First paragraph\nSecond paragraph"
+        finally:
+            _cleanup()

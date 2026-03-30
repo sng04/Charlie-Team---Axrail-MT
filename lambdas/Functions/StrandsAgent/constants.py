@@ -16,6 +16,7 @@ AGENT_SKILLS_TABLE_NAME = os.environ.get("AGENT_SKILLS_TABLE_NAME", "")
 GAP_ANALYSIS_TABLE_NAME = os.environ.get("GAP_ANALYSIS_TABLE_NAME", "")
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "us-east-1")
 WEBSOCKET_ENDPOINT = os.environ.get("WEBSOCKET_ENDPOINT", "")
+COHERE_EMBED_MODEL_ID = os.environ.get("COHERE_EMBED_MODEL_ID", "cohere.embed-english-v3")
 
 # ---------------------------------------------------------------------------
 # Semantic similarity threshold for question matching

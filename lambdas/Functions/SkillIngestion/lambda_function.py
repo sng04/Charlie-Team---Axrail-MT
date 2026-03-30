@@ -123,14 +123,21 @@ def _index_document(client: OpenSearch, document: dict) -> None:
 def _extract_text_from_file(s3_client, bucket: str, key: str) -> str:
     """Extract text from a file based on its extension.
 
-    Supports .pdf (via PyPDF2) and .md (raw UTF-8 text).
+    Supports .pdf (via PyPDF2), .md and .txt (raw UTF-8), and .docx (via python-docx).
     """
     response = s3_client.get_object(Bucket=bucket, Key=key)
     file_bytes = response["Body"].read()
+    key_lower = key.lower()
 
-    if key.lower().endswith(".md"):
+    if key_lower.endswith(".md") or key_lower.endswith(".txt"):
         return file_bytes.decode("utf-8")
 
+    if key_lower.endswith(".docx"):
+        from docx import Document
+        doc = Document(BytesIO(file_bytes))
+        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+
+    # Default: treat as PDF
     reader = PdfReader(BytesIO(file_bytes))
     text = ""
     for page in reader.pages:

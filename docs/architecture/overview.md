@@ -52,7 +52,7 @@ graph TB
     end
 
     subgraph "Data Stores"
-        DDB[(DynamoDB<br/>12 Tables)]
+        DDB[(DynamoDB<br/>14 Tables)]
         OS[(OpenSearch<br/>knowledge-vectors)]
         S3KB[(S3 KB Bucket)]
         S3SKILLS[(S3 Skills Bucket)]
@@ -96,12 +96,14 @@ graph TB
 
 | Stack | Resources | Region |
 |---|---|---|
-| `AXRAIL-DynamoDB-{env}` | 12 DynamoDB tables, 1 OpenSearch domain | ap-southeast-1 |
+| `AXRAIL-DynamoDB-{env}` | 14 DynamoDB tables, 1 OpenSearch domain | ap-southeast-1 |
 | `AXRAIL-Cognito-{env}` | User Pool, App Client, Admin/User groups | ap-southeast-1 |
 | `AXRAIL-MeetingBot-{env}` | ECS Cluster, Task Definition, VPC, SQS queue | ap-southeast-1 |
-| `AXRAIL-Lambda-{env}` | 46 Lambda functions, 5 layers, WebSocket API, 2 S3 buckets, EventBridge rule, Custom Resources | ap-southeast-1 |
+| `AXRAIL-Lambda-{env}` | 48 Lambda functions, 5 layers, WebSocket API, 2 S3 buckets, EventBridge rule, Custom Resources | ap-southeast-1 |
 | `AXRAIL-ApiServices-{env}` | REST API Gateway, routes, Cognito authorizers | ap-southeast-1 |
 | `AXRAIL-BedrockAgent-{env}` | Bedrock Agent (Nova Pro), Agent Alias, test Lambda | us-east-1 |
+
+> **Note:** `AXRAIL-ApiServices-{env}` includes the `/files/download` route for pre-signed S3 download URLs.
 
 Stack dependency order: DynamoDB → Cognito → MeetingBot → Lambda → ApiServices (BedrockAgent is independent).
 
@@ -126,6 +128,10 @@ Stack dependency order: DynamoDB → Cognito → MeetingBot → Lambda → ApiSe
 | PersonalitiesCrud | `GET/POST/PUT/DELETE /personalities` | Admin | Personality prompt CRUD |
 | SkillsCrud | `GET/POST/PUT/DELETE /skills` | Admin | Skill document CRUD + S3 upload |
 | QAPairsCrud | `GET/DELETE /qa-pairs` | Admin | QA pair read/delete |
+| KbDocumentsCrud | `GET/POST/DELETE /projects/{projectId}/kb-documents` | Admin | KB document CRUD |
+| FileDownload | `GET /files/download` | Admin+User | Generate pre-signed S3 download URLs |
+| GetSessionSummary | `GET /sessions/{sessionId}/summary` | Admin+User | Get meeting summary |
+| GetSuggestedQuestions | `GET /sessions/{sessionId}/suggested-questions` | Admin+User | Get suggested questions |
 | CreateUser | `POST /users` | Admin | Create Cognito user |
 | ChangePassword | `POST /auth/change-password` | User | Change password |
 | Logout | `POST /auth/logout` | User | Invalidate tokens |
@@ -156,7 +162,7 @@ Stack dependency order: DynamoDB → Cognito → MeetingBot → Lambda → ApiSe
 | PowertoolsLayer | `aws-lambda-powertools` (Logger, Tracer) | All Lambdas |
 | OpenSearchLayer | `opensearchpy`, `requests-aws4auth` | StrandsAgent, Ingestion, Deletion |
 | StrandsLayer | `strands-agents`, `strands-agents-tools` | StrandsAgent |
-| PyPDF2Layer | `PyPDF2` | Ingestion, SkillIngestion |
+| PyPDF2Layer | `PyPDF2`, `python-docx` | Ingestion, SkillIngestion |
 
 ## Observability
 

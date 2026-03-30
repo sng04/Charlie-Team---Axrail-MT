@@ -8,7 +8,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "Sure thing Alex. We went live at the first 10 pilot stores last Friday.",
     "start_time": 11.0,
     "end_time": 16.3,
@@ -24,7 +24,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "We processed about 4200 transactions over the weekend. Average ticket size is around 47 dollars which is in line with what we expected.",
     "start_time": 21.0,
     "end_time": 29.8,
@@ -40,7 +40,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "We had a minor hiccup with the Square terminals at two locations. The contactless reader wasn't picking up Apple Pay consistently.",
     "start_time": 35.0,
     "end_time": 43.2,
@@ -56,7 +56,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "Yeah, ticket FRC-1042. The store managers flagged it Saturday morning.",
     "start_time": 51.2,
     "end_time": 56.0,
@@ -72,7 +72,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "Shopify is running smooth. Real-time inventory sync is working and the webhook latency is under 200 milliseconds.",
     "start_time": 64.5,
     "end_time": 71.3,
@@ -88,7 +88,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "Settlement has been next-day for all transactions so far. No delays. That was a big concern for our finance team so they're happy.",
     "start_time": 78.2,
     "end_time": 86.0,
@@ -104,11 +104,11 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "That's the plan. But David wants to see the pilot data for at least two full weeks before he signs off on wave two.",
     "start_time": 94.2,
     "end_time": 101.0,
-    "confidence": 0.90,
+    "confidence": 0.9,
     "is_partial": false
   },
   {
@@ -120,7 +120,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "Yeah, April 14th is what we're penciling in. That gives us a week buffer before the spring sale.",
     "start_time": 107.0,
     "end_time": 113.5,
@@ -136,7 +136,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "What's the false positive rate on that? We can't afford to block legitimate transactions during peak hours.",
     "start_time": 126.0,
     "end_time": 132.5,
@@ -152,7 +152,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "That sounds reasonable. Let's enable it on the pilot stores and monitor for a week.",
     "start_time": 141.5,
     "end_time": 147.0,
@@ -168,11 +168,11 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "Just the Salesforce CRM sync. James from IT says the API credentials haven't been provisioned yet.",
     "start_time": 154.2,
     "end_time": 160.8,
-    "confidence": 0.90,
+    "confidence": 0.9,
     "is_partial": false
   },
   {
@@ -184,7 +184,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "Agreed. Other than that, the team is happy with how things are going. The dashboard reporting is really useful.",
     "start_time": 169.0,
     "end_time": 175.5,
@@ -200,7 +200,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "And on our side, David will review the two-week pilot data and give the green light for wave two by April 10th.",
     "start_time": 187.0,
     "end_time": 194.2,
@@ -216,7 +216,7 @@
     "is_partial": false
   },
   {
-    "speaker": "spk_1",
+    "speaker": "spk_0",
     "text": "Sounds good. Talk then. Thanks Alex.",
     "start_time": 201.2,
     "end_time": 204.0,

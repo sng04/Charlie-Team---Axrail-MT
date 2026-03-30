@@ -9,8 +9,9 @@ from strands import Agent
 from strands.models.bedrock import BedrockModel
 
 from constants import BEDROCK_REGION, MATCH_THRESHOLD, SESSIONS_TABLE_NAME, TRANSCRIPTS_TABLE_NAME
-from helpers import _get_conn_data, _get_dynamodb, _post_to_connection
+from helpers import _get_conn_data, _get_dynamodb, _post_to_connection, _broadcast_to_session
 from question_detection import _detect_question, _generate_suggested_response
+from speaker_classification import classify_line_role, init_role_classifier
 from tools import _generate_embedding
 from windows import (
     _check_answer_windows,
@@ -31,12 +32,14 @@ logger = Logger(child=True)
 
 
 def _classify_speakers(lines: list, conn_data: dict) -> tuple[dict, str]:
-    """Classify speaker labels into user/client roles.
+    """Classify each transcript line's speaker role from text content.
 
-    Uses Nova Pro to infer roles from transcript context.
-    Falls back to first-speaker-is-user on failure.
+    When single-channel audio produces a single speaker label for all lines,
+    we use Nova Pro to infer per-line roles (user vs client) from context.
 
-    Returns (role_map, confidence) where confidence is "high" or "low".
+    Returns (role_map, confidence) where role_map maps speaker labels to roles.
+    For single-speaker transcripts, returns an empty map — per-line classification
+    is handled by _classify_line_role instead.
     """
     speakers = list(
         {line.get("speaker", "") for line in lines if line.get("speaker")}
@@ -44,7 +47,9 @@ def _classify_speakers(lines: list, conn_data: dict) -> tuple[dict, str]:
     if not speakers:
         return {}, "high"
     if len(speakers) == 1:
-        return {speakers[0]: "user"}, "high"
+        # Single speaker label (single-channel audio) — can't map labels to roles.
+        # Per-line classification will be done by _classify_line_role.
+        return {}, "low"
 
     transcript_sample = "\n".join(
         f"{l['speaker']}: {l['text']}" for l in lines[:10]
@@ -117,7 +122,7 @@ def _update_session_transcript_ts(session_id: str) -> None:
 
 
 def _handle_process_transcript(body: dict, connection_id: str) -> dict:
-    """Handle processTranscript action — store, match, buffer (no speaker classification)."""
+    """Handle processTranscript action — store, match, buffer with speaker classification."""
     lines = body.get("lines", [])
     if not lines:
         _post_to_connection(connection_id, {
@@ -130,10 +135,41 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
     conn_data = _get_conn_data(connection_id)
     project_id = conn_data["project_id"]
 
-    # --- Build entries (no speaker classification) ---
+    # --- Speaker classification (cached per connection) ---
+    role_map = conn_data.get("speaker_role_map")
+    single_speaker_mode = False
+    if role_map is None:
+        speakers = list({l.get("speaker", "") for l in lines if l.get("speaker")})
+        if len(speakers) >= 2:
+            role_map, confidence = _classify_speakers(lines, conn_data)
+            conn_data["speaker_role_map"] = role_map
+            conn_data["single_speaker_mode"] = False
+            logger.info("Speaker roles classified: %s (confidence: %s)", role_map, confidence)
+            _post_to_connection(connection_id, {
+                "type": "speakerRoles",
+                "role_map": role_map,
+                "confidence": confidence,
+            })
+        else:
+            # Single-channel audio — all lines have the same speaker label.
+            # Initialize Cohere Embed classifier for per-line role detection.
+            role_map = {}
+            conn_data["speaker_role_map"] = role_map
+            conn_data["single_speaker_mode"] = True
+            init_role_classifier(conn_data)
+            logger.info("Single speaker detected — using Cohere Embed role classification")
+    single_speaker_mode = conn_data.get("single_speaker_mode", False)
+
+    # --- Build entries ---
     entries = []
+    buffer = conn_data.get("transcript_buffer", [])
     for line in lines:
         speaker = line.get("speaker", "Unknown")
+        if single_speaker_mode:
+            # Classify each line using Cohere Embed cosine similarity
+            speaker_role = classify_line_role(line.get("text", ""), conn_data)
+        else:
+            speaker_role = role_map.get(speaker, "unknown")
         timestamp = line.get("timestamp", "")
         if not timestamp:
             timestamp = datetime.now(timezone.utc).isoformat()
@@ -141,6 +177,7 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
             "transcript_id": str(uuid.uuid4()),
             "session_id": session_id,
             "speaker": speaker,
+            "speaker_role": speaker_role,
             "text": line.get("text", ""),
             "timestamp": timestamp,
             "start_time": line.get("start_time", ""),
@@ -204,17 +241,24 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
             is_new_question=is_new_question,
         )
 
-        # If question detected → send questionDetected, generate suggested response, open response window
+        # If question detected → send questionDetected, generate suggested response only for client questions
         if is_question_detected:
             try:
-                _post_to_connection(connection_id, {
+                speaker_role = entry.get("speaker_role", "unknown")
+                q_detected_msg = {
                     "type": "questionDetected",
                     "question": entry["text"],
+                    "speaker": entry.get("speaker", ""),
+                    "speaker_role": speaker_role,
                     "detection_method": detection_method,
-                })
-                _generate_suggested_response(
-                    entry["text"], connection_id, conn_data
-                )
+                }
+                _post_to_connection(connection_id, q_detected_msg)
+                _broadcast_to_session(session_id, q_detected_msg, exclude_connection_id=connection_id)
+                # Only generate suggested response for client questions (or unknown as safe default)
+                if speaker_role in ("client", "unknown"):
+                    _generate_suggested_response(
+                        entry["text"], connection_id, conn_data, session_id
+                    )
                 _open_user_response_window(
                     conn_data, entry["text"], entry
                 )
@@ -226,12 +270,14 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
             try:
                 q, sim = matched_question
                 _mark_question_matched(q["question_id"])
-                _post_to_connection(connection_id, {
+                q_matched_msg = {
                     "type": "questionMatched",
                     "question_text": q["question_text"],
                     "spoken_text": entry["text"],
                     "similarity": round(sim, 4),
-                })
+                }
+                _post_to_connection(connection_id, q_matched_msg)
+                _broadcast_to_session(session_id, q_matched_msg, exclude_connection_id=connection_id)
                 _open_answer_window(conn_data, q, entry)
             except Exception:
                 logger.exception("Question matching handling failed for line")

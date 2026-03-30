@@ -2,7 +2,7 @@
 
 ## Overview
 
-The ingestion pipeline automatically processes documents uploaded to the KB S3 bucket, extracts text, generates vector embeddings, and indexes them in OpenSearch for semantic search.
+The ingestion pipeline automatically processes documents uploaded to the KB S3 bucket, extracts text, generates vector embeddings, and indexes them in OpenSearch for semantic search. Supported file types: `.pdf`, `.md`, `.txt`, and `.docx`.
 
 ## How It Works
 
@@ -31,6 +31,8 @@ sequenceDiagram
 |---|---|
 | `.pdf` | PyPDF2 text extraction |
 | `.md` | Raw UTF-8 decode |
+| `.txt` | Raw UTF-8 decode |
+| `.docx` | python-docx text extraction |
 
 ## S3 Key Format
 
@@ -43,6 +45,21 @@ Meeting summaries saved by `endMeeting` use the path `{project_id}/summaries/{se
 ## Deletion
 
 When a file is removed from the KB bucket, the Deletion Lambda automatically removes all corresponding vectors from OpenSearch by matching the `source_file` field.
+
+## KbDocuments Table Tracking
+
+When a file is uploaded via the [KbDocumentsCrud API](../api/README.md#kb-documents), a record is created in the `KbDocuments` table with `status: "pending"`. After successful ingestion, the Ingestion Lambda updates the status to `"active"` by querying the `project-index` GSI to locate the matching document record.
+
+See [Data Model — KbDocuments](../architecture/data-model.md#kbdocuments) for the full schema.
+
+## Meeting Summary Auto-Registration
+
+When `endMeeting` saves a summary to S3, it also creates a `KbDocuments` record with:
+- `doc_type: "meeting_summary"`
+- `file_name: "Summary - {session_name}.md"`
+- `session_id` linking back to the source session
+
+This ensures meeting summaries appear in the project's KB file list alongside user-uploaded documents.
 
 ## Retry Logic
 

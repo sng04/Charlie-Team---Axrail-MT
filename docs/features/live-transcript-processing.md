@@ -64,7 +64,18 @@ ws.onmessage = (event) => {
 
 ## processTranscript WebSocket Action
 
-The `processTranscript` WebSocket action handles transcript lines sent by external callers (not the bot). It processes all incoming lines without speaker classification, stores transcript entries, matches questions against pre-set topics, detects questions, and captures answers automatically.
+The `processTranscript` WebSocket action handles transcript lines sent by external callers (not the bot). It processes all incoming lines, performs speaker role classification (see [Speaker Role Classification](speaker-role-classification.md)), stores transcript entries, matches questions against pre-set topics, detects questions, and captures answers automatically.
+
+## Speaker Role Classification
+
+Single-channel audio produces a single speaker label (`spk_0`) for all lines. The pipeline uses Cohere Embed v3 on Bedrock to classify each line's `speaker_role`:
+
+- **Single-speaker path** — All lines share the same speaker label. Cohere Embed v3 embeds each line and compares it via cosine similarity against pre-computed role exemplar centroids to assign `"user"` or `"client"`.
+- **Multi-speaker path** — When 2+ distinct speaker labels exist, Nova Pro classifies labels to roles in a single fast-path call. A `speakerRoles` message is broadcast on the first batch.
+- **Latency** — Exemplar centroids are computed once per session (~500ms). Each subsequent line is one embed call (~100-200ms) + cosine similarity.
+- **Fallback** — On error, the role defaults to `"unknown"`, which still triggers suggested responses (safe default).
+
+For full details, see [Speaker Role Classification](speaker-role-classification.md).
 
 ## Three-Stage QA Pipeline
 
@@ -108,8 +119,8 @@ All non-partial lines are checked for questions using a two-tier approach:
 Filter: Lines shorter than 5 words are skipped to avoid false positives.
 
 When a question is detected:
-- A `questionDetected` message is sent
-- A suggested response is generated from the knowledge base
+- A `questionDetected` message is sent (includes `speaker` and `speaker_role` fields)
+- A suggested response is generated from the knowledge base only for `speaker_role` `"client"` or `"unknown"` (NOT for `"user"`)
 - A response window opens to capture the verbal answer that follows (saved with `source: "participant"`)
 
 The response window follows the same close conditions as the answer window (5 lines / new question detected / 60s timeout).
@@ -118,9 +129,19 @@ The response window follows the same close conditions as the answer window (5 li
 
 All transcript lines are batch-written to the TranscriptsTable with fields: `transcript_id`, `session_id`, `speaker`, `text`, `timestamp`, `start_time`, `end_time`, `confidence`, `is_partial`.
 
-> **Note:** The `speaker_role` field is no longer assigned by the processing pipeline. Existing records may still contain `speaker_role` from prior multi-channel processing, but new entries will not include it.
+> **Note:** The `speaker_role` field IS now populated by the processing pipeline using Cohere Embed v3 speaker classification. See [Speaker Role Classification](speaker-role-classification.md) for details.
 
 A rolling buffer of the last 50 lines is maintained in memory for context.
+
+## QA Event Broadcasting
+
+The following events are broadcast to ALL WebSocket connections on the same session, not just the caller:
+- `questionDetected`
+- `suggestedResponse`
+- `qaPairAutoSaved`
+- `questionUnanswered`
+
+This ensures all participants connected to a session see real-time QA activity.
 
 ## Known Limitation
 

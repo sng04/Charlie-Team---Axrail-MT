@@ -30,6 +30,9 @@ sys.modules["PyPDF2"] = MagicMock()
 sys.modules["dns"] = MagicMock()
 sys.modules["dns.resolver"] = MagicMock()
 
+# Mock python-docx (used by Ingestion / SkillIngestion for .docx support)
+sys.modules["docx"] = MagicMock()
+
 # ---------------------------------------------------------------------------
 # Layer path injection — add SharedLayer so response_utils / custom_exceptions
 # are importable by Lambda code under test.
@@ -77,6 +80,8 @@ _defaults = {
     "AGENT_SKILLS_TABLE_NAME": "test-AgentSkills",
     "DYNAMODB_TABLE": "test-Users",
     "GAP_ANALYSIS_TABLE_NAME": "test-GapAnalysis",
+    "KB_DOCUMENTS_TABLE_NAME": "test-KbDocuments",
+    "COHERE_EMBED_MODEL_ID": "cohere.embed-english-v3",
 }
 for k, v in _defaults.items():
     os.environ.setdefault(k, v)

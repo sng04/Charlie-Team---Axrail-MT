@@ -189,6 +189,8 @@ Responses (two messages):
 
 The summary uses `##` level headings for each chapter. It is saved to S3 at `{project_id}/summaries/{session_id}.md` and automatically ingested into the knowledge base via the Ingestion Lambda.
 
+> **Note:** The summary is saved deterministically by the `endMeeting` handler (not relying on the AI agent to call `save_summary_to_s3`). A `KbDocuments` record is also created automatically with `doc_type: "meeting_summary"` so the summary appears in the project's KB file list. See [Knowledge Base Ingestion — Meeting Summary Auto-Registration](../features/knowledge-base-ingestion.md#meeting-summary-auto-registration).
+
 ---
 
 ### retroAnalysis
@@ -275,9 +277,9 @@ Each question is embedded using Titan Embed Text V2 (1024 dimensions) and stored
 
 ### processTranscript
 
-Process live transcript lines with question matching, question detection, and answer/response window management.
+Process live transcript lines with speaker role classification, question matching, question detection, and answer/response window management.
 
-This is the most complex action — it orchestrates three stages of live QA detection. All non-partial lines are processed uniformly without speaker classification.
+This is the most complex action — it orchestrates speaker classification and three stages of live QA detection. Speaker roles are classified using Cohere Embed v3 on Bedrock (see [Speaker Role Classification](../features/speaker-role-classification.md)).
 
 Request:
 
@@ -308,7 +310,6 @@ Request:
 
 Fields:
 - `lines` (required) — Array of transcript lines with `speaker`, `text`, `start_time`, `end_time`, `confidence`, and `is_partial`
-- `speaker_hint` (deprecated) — Still accepted for backward compatibility but ignored. Speaker classification is no longer performed.
 
 Response (always sent):
 
@@ -320,6 +321,26 @@ Response (always sent):
 ```
 
 Additional messages may be sent depending on what the transcript triggers:
+
+#### Speaker Role Classification
+
+When multi-speaker labels are detected (2+ distinct speaker labels in the first batch), a `speakerRoles` message is broadcast:
+
+```json
+{
+  "type": "speakerRoles",
+  "roles": {
+    "spk_0": "user",
+    "spk_1": "client"
+  }
+}
+```
+
+For single-speaker audio, classification happens per-line via Cohere Embed v3 (no `speakerRoles` message is sent). See [Speaker Role Classification](../features/speaker-role-classification.md) for details.
+
+#### QA Event Broadcasting
+
+All QA-related events (`questionDetected`, `suggestedResponse`, `qaPairAutoSaved`, `questionUnanswered`) are broadcast to ALL WebSocket connections on the same session, not just the caller.
 
 #### Stage 1: Question Matching
 
@@ -371,11 +392,13 @@ When any non-partial line contains a question (detected via heuristics or Nova P
 {
   "type": "questionDetected",
   "question": "What security certifications does your platform have?",
+  "speaker": "spk_0",
+  "speaker_role": "client",
   "detection_method": "heuristic"
 }
 ```
 
-2. A suggested response is generated from the knowledge base:
+2. A suggested response is generated from the knowledge base (only for `speaker_role` `"client"` or `"unknown"` — NOT for `"user"`):
 
 ```json
 {

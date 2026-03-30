@@ -181,6 +181,28 @@ def step_00_authenticate() -> str:
         raise
 
 
+def step_00b_cleanup_previous_sessions(token: str):
+    """Delete previous E2E test sessions to avoid stale data."""
+    _h("STEP 0b: Cleanup Previous Test Sessions")
+    try:
+        sessions_resp = _api("GET", "/sessions?limit=50", token)
+        items = sessions_resp.get("data", {}).get("items", [])
+        deleted = 0
+        if isinstance(items, list):
+            test_sessions = [s for s in items if "E2E Test" in s.get("name", "") or "e2e" in s.get("description", "").lower()]
+            for s in test_sessions:
+                sid = s["session_id"]
+                print(f"  Deleting: {s.get('name', '')} ({sid[:8]}...)")
+                _api("DELETE", f"/sessions/{sid}", token)
+                dynamodb.Table(SESSIONS_TABLE).delete_item(Key={"session_id": sid})
+                deleted += 1
+        print(f"  Cleaned up {deleted} previous test session(s)")
+        _rec("Cleanup", "PASS", {"deleted": deleted})
+    except Exception:
+        _rec("Cleanup", "FAIL", error=traceback.format_exc())
+        # Non-fatal — continue even if cleanup fails
+
+
 def step_01_get_or_create_project(token: str) -> str:
     """Reuse existing NovaPay project or create one with the bot credential."""
     _h("STEP 1: Get or Create Project")
@@ -807,6 +829,7 @@ def main():
     summary = ""
     try:
         token = step_00_authenticate()
+        step_00b_cleanup_previous_sessions(token)
         project_id = step_01_get_or_create_project(token)
         agent_id, _ = step_02_setup_agent(token)
         step_03_upload_kb(project_id)

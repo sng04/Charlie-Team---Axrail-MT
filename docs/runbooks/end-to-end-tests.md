@@ -21,10 +21,13 @@ Three test scripts exercise the stack:
 | `scripts/test_all_endpoints.py` | REST + WebSocket endpoint coverage | N/A (self-contained) |
 | `scripts/test_case_1.py` | NovaPay fintech sales demo | `resources/test-case-1/` |
 | `scripts/test_case_2.py` | GreenBuild consulting kickoff | `resources/test-case-2/` |
+| `scripts/test_case_short.py` | Quick check-in test (~5 min) | `resources/test-case-short/` |
 
 `test_all_endpoints.py` validates all REST CRUD endpoints and WebSocket actions with synthetic data. It creates and cleans up its own test resources.
 
-The two test case scripts follow the same 16-step flow:
+`test_case_short.py` uses single-speaker transcript data (all `spk_0`) to test the Cohere Embed v3 speaker role classifier. See [Speaker Role Classification](../features/speaker-role-classification.md).
+
+The two full test case scripts follow the same 19-step flow:
 
 1. Authenticate (JWT via `/auth/admin/login`)
 2. Upload KB documents to S3
@@ -38,10 +41,13 @@ The two test case scripts follow the same 16-step flow:
 10. WebSocket: `analyzeGaps` — knowledge gap analysis
 11. WebSocket: `setSuggestedQuestions` + question matching
 12. WebSocket: `endMeeting` — meeting summary generation
-13. WebSocket: `retroAnalysis` — post-meeting coaching
-14. WebSocket: `retroChat` — follow-up questions
-15. REST: verify QA pairs extracted
-16. REST: CRUD smoke test across all endpoints
+13. Cleanup — remove test resources
+14. Verify summary ingested into KB
+15. WebSocket: `retroAnalysis` — post-meeting coaching
+16. WebSocket: `retroChat` — follow-up questions
+17. Post-completion retro analysis
+18. Post-completion QA verification
+19. REST: CRUD smoke test across all endpoints
 
 ## Running
 
@@ -71,8 +77,8 @@ Both scripts read configuration from environment variables with sensible default
 |---|---|---|
 | `REST_API_URL` | `https://sjsd378hbd.execute-api.ap-southeast-1.amazonaws.com/dev` | REST API base URL |
 | `WS_API_URL` | `wss://hey8o0q9tb.execute-api.ap-southeast-1.amazonaws.com/production` | WebSocket API URL |
-| `ADMIN_USERNAME` | `admin@axrail.com` | Admin login username |
-| `ADMIN_PASSWORD` | `DevAdmin@123` | Admin login password |
+| `ADMIN_USERNAME` | `admin` | Admin login username |
+| `ADMIN_PASSWORD` | `Admin@12345` | Admin login password |
 | `KB_BUCKET` | `axrail-kb-dev-848332098006` | Knowledge base S3 bucket |
 | `SKILLS_BUCKET` | `axrail-skills-dev-848332098006` | Skills S3 bucket |
 | `SESSIONS_TABLE` | `dev-Sessions` | DynamoDB Sessions table |
@@ -82,7 +88,7 @@ Both scripts read configuration from environment variables with sensible default
 
 ## Expected Outcome
 
-Each script prints results for all 16 tests. Review output against the expected results documented in `docs/testing/test-plan.md`.
+Each script prints results for all tests (19 steps for full test cases, 16 for `test_all_endpoints.py`). Review output against the expected results documented in `docs/testing/test-plan.md`.
 
 Key things to verify:
 - Authentication returns a valid JWT token

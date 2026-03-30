@@ -5,7 +5,7 @@ from strands import Agent
 from strands.models.bedrock import BedrockModel
 
 from constants import BEDROCK_REGION, TASK_PROMPTS, _QUESTION_INDICATORS
-from helpers import _post_to_connection
+from helpers import _post_to_connection, _broadcast_to_session
 from tools import search_knowledge_base
 
 logger = Logger(child=True)
@@ -74,7 +74,7 @@ def _detect_question(text: str) -> tuple:
 
 
 def _generate_suggested_response(
-    question: str, connection_id: str, conn_data: dict
+    question: str, connection_id: str, conn_data: dict, session_id: str = ""
 ) -> None:
     """Generate and send a suggested response for a client question."""
     project_id = conn_data["project_id"]
@@ -97,15 +97,21 @@ def _generate_suggested_response(
             f"Client question: {question}"
         )
         result = agent(enriched)
-        _post_to_connection(connection_id, {
+        msg = {
             "type": "suggestedResponse",
             "question": question,
             "suggested_answer": str(result),
-        })
+        }
+        _post_to_connection(connection_id, msg)
+        if session_id:
+            _broadcast_to_session(session_id, msg, exclude_connection_id=connection_id)
     except Exception as exc:
         logger.exception("Suggested response generation failed")
-        _post_to_connection(connection_id, {
+        err_msg = {
             "type": "suggestedResponse",
             "question": question,
             "suggested_answer": f"Error generating suggestion: {exc}",
-        })
+        }
+        _post_to_connection(connection_id, err_msg)
+        if session_id:
+            _broadcast_to_session(session_id, err_msg, exclude_connection_id=connection_id)

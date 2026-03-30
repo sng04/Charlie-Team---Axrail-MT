@@ -1,6 +1,6 @@
 # Data Model
 
-12 DynamoDB tables + 1 OpenSearch domain.
+14 DynamoDB tables + 1 OpenSearch domain.
 
 ## D1 Tables (Meeting Management)
 
@@ -22,6 +22,7 @@
 | description | String | |
 | s3_arn | String | |
 | bot_credential_id | String | |
+| agent_id | String | FK → Agents |
 | created_at | String (ISO 8601) | |
 | updated_at | String (ISO 8601) | |
 
@@ -61,7 +62,7 @@
 | text | String | |
 | timestamp | String | |
 
-> **Note:** The `speaker_role` field is no longer populated by the processing pipeline for single-channel transcripts. It is retained in the schema for backward compatibility with existing data. New transcript entries will not include this field.
+> **Note:** The `speaker_role` field IS now populated by the processing pipeline using Cohere Embed v3 speaker classification. Values are `"user"`, `"client"`, or `"unknown"`. See [Speaker Role Classification](../features/speaker-role-classification.md) for details.
 
 ### BotCredentials
 | Field | Type | Key |
@@ -164,6 +165,22 @@ Enables many-to-many relationships between agents and skills. A single skill doc
 | suggested_questions | List of Strings | |
 | analyzed_at | String (ISO 8601) | |
 
+### KbDocuments
+| Field | Type | Key |
+|---|---|---|
+| document_id | String | PK |
+| project_id | String | GSI: project-index |
+| file_name | String | |
+| description | String | |
+| s3_key | String | |
+| file_type | String | |
+| file_size | Number | |
+| status | String (pending/active) | |
+| doc_type | String (user_upload/meeting_summary) | |
+| session_id | String | Optional, present for meeting summaries |
+| created_at | String (ISO 8601) | |
+| updated_at | String (ISO 8601) | |
+
 ## OpenSearch
 
 ### Index: knowledge-vectors
@@ -188,4 +205,6 @@ Enables many-to-many relationships between agents and skills. A single skill doc
 - Projects → Sessions (1:many via project-index GSI)
 - Sessions → GapAnalysisResults (1:1 via session_id)
 - BotCredentials → BotPool (1:many via credential-status-index GSI)
+- Projects → KbDocuments (1:many via project-index GSI)
+- Projects → Agents (FK: agent_id)
 - BotCredentials → EventBridge → ValidateBotCredentialWorker (async SMTP validation)

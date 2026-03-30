@@ -176,6 +176,26 @@ def _post_to_connection(connection_id: str, data: dict) -> None:
         logger.exception("Failed to post to connection %s", connection_id)
 
 
+def _broadcast_to_session(
+    session_id: str, data: dict, exclude_connection_id: str = ""
+) -> None:
+    """Broadcast a message to all active WebSocket connections for a session.
+
+    Iterates the in-memory connection cache to find all connections with
+    the matching session_id and posts the message to each one.
+
+    Args:
+        session_id: The session to broadcast to.
+        data: The message payload to send.
+        exclude_connection_id: Optional connection to skip (the caller).
+    """
+    if not session_id:
+        return
+    for conn_id, conn_data in _connection_prompts.items():
+        if conn_data.get("session_id") == session_id and conn_id != exclude_connection_id:
+            _post_to_connection(conn_id, data)
+
+
 def _get_conn_data(connection_id: str) -> dict:
     """Retrieve or rebuild connection data from cache."""
     conn_data = _connection_prompts.get(connection_id)
