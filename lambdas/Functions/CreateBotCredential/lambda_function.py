@@ -2,7 +2,7 @@
 CreateBotCredential Lambda Function
 
 Creates a new bot credential in DynamoDB and stores password in Secrets Manager.
-Publishes event to EventBridge for async SMTP validation.
+Credential is immediately set to verified and active (no SMTP validation).
 Admin only (enforced by Lambda Authorizer).
 """
 
@@ -26,13 +26,11 @@ tracer = Tracer()
 
 dynamodb = boto3.resource("dynamodb")
 secrets_client = boto3.client("secretsmanager")
-events_client = boto3.client("events")
 
 table_name = os.environ.get("BOT_CREDENTIALS_TABLE")
 table = dynamodb.Table(table_name)
 
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
-EVENT_BUS_NAME = os.environ.get("EVENT_BUS_NAME", "default")
 
 
 def _parse_body(event: dict) -> dict:
@@ -139,8 +137,8 @@ def lambda_handler(event, context):
         item = {
             "credential_id": credential_id,
             "email": data["email"],
-            "verification_status": "validating",
-            "available_status": "inactive",
+            "verification_status": "verified",
+            "available_status": "active",
             "warm_pool_size": warm_pool_size,
             "created_at": now,
             "updated_at": now,
@@ -148,12 +146,9 @@ def lambda_handler(event, context):
 
         table.put_item(Item=item)
 
-        # Publish event for async SMTP validation
-        _publish_validation_event(credential_id, data["email"])
-
         return createResponse(
             200,
-            "Bot credential created. Validating email credentials...",
+            "Bot credential created and activated.",
             item,
         )
     except BadRequestError as e:

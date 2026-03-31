@@ -10,13 +10,18 @@ from aws_cdk import (
     RemovalPolicy,
     CfnOutput,
     Duration,
+    CustomResource,
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_iam as iam,
+    aws_lambda as _lambda,
     aws_logs as logs,
+    aws_s3 as s3,
+    aws_s3_deployment as s3deploy,
     aws_sqs as sqs,
     aws_ssm as ssm,
 )
+from aws_cdk.custom_resources import Provider
 from constructs import Construct
 
 
@@ -50,6 +55,7 @@ class MeetingBotStack(Stack):
         self._create_vpc()
         self._create_security_group()
         self._create_ecs_cluster()
+        self._create_transcribe_vocabulary()
         self._create_task_definition()
         self._create_outputs()
 
@@ -129,6 +135,79 @@ class MeetingBotStack(Stack):
             vpc=self._vpc,
             container_insights_v2=ecs.ContainerInsights.ENABLED,
         )
+
+    def _create_transcribe_vocabulary(self) -> None:
+        """Upload vocab file to S3 and create/update Transcribe custom vocabulary."""
+        self._vocab_name = f"{self._environment}-tech-vocabulary"
+
+        # S3 bucket for vocabulary file
+        self._vocab_bucket = s3.Bucket(
+            self,
+            "VocabularyBucket",
+            bucket_name=f"axrail-{self._environment}-transcribe-vocab-{self.account}",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+        )
+
+        # Upload the vocab table file
+        vocab_deployment = s3deploy.BucketDeployment(
+            self,
+            "VocabularyDeployment",
+            sources=[s3deploy.Source.asset("scripts", exclude=["*", "!tech-vocab-table.txt"])],
+            destination_bucket=self._vocab_bucket,
+            destination_key_prefix="vocabulary",
+        )
+
+        vocab_s3_uri = f"s3://{self._vocab_bucket.bucket_name}/vocabulary/tech-vocab-table.txt"
+
+        # Lambda for custom resource to manage Transcribe vocabulary
+        vocab_handler = _lambda.Function(
+            self,
+            "VocabularyHandler",
+            function_name=f"AXRAIL-{self._environment}-TranscribeVocabulary",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="lambda_function.handler",
+            code=_lambda.Code.from_asset("lambdas/Functions/ManageTranscribeVocabulary"),
+            timeout=Duration.minutes(5),
+            memory_size=128,
+        )
+
+        vocab_handler.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "transcribe:CreateVocabulary",
+                    "transcribe:UpdateVocabulary",
+                    "transcribe:DeleteVocabulary",
+                    "transcribe:GetVocabulary",
+                ],
+                resources=["*"],
+            )
+        )
+
+        vocab_handler.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetObject"],
+                resources=[f"{self._vocab_bucket.bucket_arn}/*"],
+            )
+        )
+
+        provider = Provider(
+            self,
+            "VocabularyProvider",
+            on_event_handler=vocab_handler,
+        )
+
+        self._vocab_resource = CustomResource(
+            self,
+            "TranscribeVocabulary",
+            service_token=provider.service_token,
+            properties={
+                "VocabularyName": self._vocab_name,
+                "LanguageCode": "en-US",
+                "VocabularyFileUri": vocab_s3_uri,
+            },
+        )
+        self._vocab_resource.node.add_dependency(vocab_deployment)
 
     def _create_task_definition(self) -> None:
         """Create Fargate Task Definition."""
@@ -256,7 +335,7 @@ class MeetingBotStack(Stack):
                 "LOG_LEVEL": "INFO",
                 "ENABLE_TRANSCRIPTION": "true",
                 "TRANSCRIBE_LANGUAGE": "en-US",
-                "TRANSCRIBE_VOCABULARY_NAME": "",
+                "TRANSCRIBE_VOCABULARY_NAME": self._vocab_name,
                 "AWS_REGION": self.region,
                 "ENVIRONMENT": self._environment,
                 "SQS_QUEUE_URL": self._meeting_queue.queue_url,
