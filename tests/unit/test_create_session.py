@@ -100,7 +100,7 @@ class TestCreateSession:
                 "body": json.dumps({
                     "project_id": "proj-1",
                     "name": "Test Session",
-                    "meeting_link": "https://meet.example.com/abc",
+                    "meeting_link": "https://meet.google.com/abc-defg-hij",
                 }),
                 "requestContext": {
                     "authorizer": {"user_id": "admin-1", "groups": "admin"},
@@ -166,7 +166,7 @@ class TestCreateSession:
                 "body": json.dumps({
                     "project_id": "proj-1",
                     "name": "Test",
-                    "meeting_link": "https://meet.example.com/abc",
+                    "meeting_link": "https://meet.google.com/abc-defg-hij",
                 }),
                 "requestContext": {
                     "authorizer": {"user_id": "admin-1", "groups": "admin"},

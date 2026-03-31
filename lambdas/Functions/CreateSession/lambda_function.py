@@ -24,6 +24,7 @@ from boto3.dynamodb.conditions import Key
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError, UnauthorizedError
+from url_validation import validate_meeting_link
 
 QA_PAIRS_TABLE_NAME = os.environ.get("QA_PAIRS_TABLE_NAME", "")
 SUGGESTED_QUESTIONS_TABLE_NAME = os.environ.get("SUGGESTED_QUESTIONS_TABLE_NAME", "")
@@ -83,6 +84,12 @@ def _validate_input(data: dict) -> None:
     missing = [f for f in required_fields if f not in data or data[f] is None]
     if missing:
         raise BadRequestError(f"Missing required fields: {', '.join(missing)}")
+
+    meeting_link = data.get("meeting_link")
+    if meeting_link:
+        error = validate_meeting_link(meeting_link)
+        if error:
+            raise BadRequestError(error)
 
 
 def _verify_project_exists(project_id: str) -> dict:

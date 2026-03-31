@@ -16,6 +16,8 @@ from aws_lambda_powertools import Logger, Tracer
 import boto3
 from botocore.exceptions import ClientError
 
+from url_validation import validate_email_domain
+
 logger = Logger()
 tracer = Tracer()
 
@@ -171,7 +173,14 @@ def lambda_handler(event, context):
             return {"statusCode": 400, "body": "Missing credential_id or email"}
         
         logger.info(f"Validating credential {credential_id} for email {email}")
-        
+
+        # Validate email domain before any DNS/SMTP operations
+        domain_error = validate_email_domain(email)
+        if domain_error:
+            logger.warning(f"Email domain validation failed for {email}: {domain_error}")
+            _update_credential_status(credential_id, "invalid", domain_error)
+            return {"statusCode": 400, "body": domain_error}
+
         # Get password from Secrets Manager
         try:
             password = _get_password(credential_id)

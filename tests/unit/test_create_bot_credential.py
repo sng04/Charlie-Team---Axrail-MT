@@ -59,7 +59,7 @@ def _env_vars():
 
 class TestCreateBotCredential:
     def test_create_success(self):
-        """Successful creation publishes EventBridge event and sets status to validating."""
+        """Successful creation sets status to verified (SMTP verification removed)."""
         mock_table = MagicMock()
         mock_table.query.return_value = {"Items": []}
 
@@ -75,10 +75,9 @@ class TestCreateBotCredential:
             assert response["statusCode"] == 200
             body = json.loads(response["body"])
             assert body["status"] is True
-            assert body["data"]["verification_status"] == "validating"
+            assert body["data"]["verification_status"] == "verified"
             assert body["data"]["warm_pool_size"] == 1
             mock_table.put_item.assert_called_once()
-            mock_events.put_events.assert_called_once()
             mock_secrets.create_secret.assert_called_once()
         finally:
             _cleanup()

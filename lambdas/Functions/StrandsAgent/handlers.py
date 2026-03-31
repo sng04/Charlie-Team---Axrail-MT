@@ -126,6 +126,14 @@ def _handle_send_message(body: dict, connection_id: str) -> dict:
 
     session_id = body.get("session_id", "default-session")
     conn_data = _get_conn_data(connection_id)
+
+    # Refresh system prompt to pick up personality/agent changes
+    agent_id = conn_data.get("agent_id")
+    if agent_id:
+        system_prompt, agent_name = build_system_prompt(agent_id)
+        conn_data["system_prompt"] = system_prompt
+        conn_data["agent_name"] = agent_name
+
     project_id = conn_data["project_id"]
     if project_id == "default-project" and session_id != "default-session":
         project_id = _lookup_project_id(session_id)
@@ -178,6 +186,14 @@ def _handle_detect_question(body: dict, connection_id: str) -> dict:
 
     session_id = body.get("session_id", "default-session")
     conn_data = _get_conn_data(connection_id)
+
+    # Refresh system prompt to pick up personality/agent changes
+    agent_id = conn_data.get("agent_id")
+    if agent_id:
+        system_prompt, agent_name = build_system_prompt(agent_id)
+        conn_data["system_prompt"] = system_prompt
+        conn_data["agent_name"] = agent_name
+
     project_id = conn_data["project_id"]
     if project_id == "default-project" and session_id != "default-session":
         project_id = _lookup_project_id(session_id)

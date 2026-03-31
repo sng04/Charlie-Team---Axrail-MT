@@ -56,9 +56,16 @@ def _validate_required(data: dict, fields: list) -> None:
 
 def _generate_presigned_url(s3_key: str) -> str:
     """Generate a pre-signed PUT URL for the given S3 key."""
+    file_ext = s3_key.rsplit(".", 1)[-1].lower() if "." in s3_key else ""
+    content_type = {
+        "pdf": "application/pdf",
+        "md": "text/markdown",
+        "txt": "text/plain",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }.get(file_ext, "application/octet-stream")
     return s3_client.generate_presigned_url(
         "put_object",
-        Params={"Bucket": SKILLS_BUCKET_NAME, "Key": s3_key},
+        Params={"Bucket": SKILLS_BUCKET_NAME, "Key": s3_key, "ContentType": content_type},
         ExpiresIn=PRESIGNED_URL_EXPIRY,
     )
 
@@ -171,10 +178,17 @@ def create_skill(event: dict) -> dict:
     skills_table.put_item(Item=item)
     upload_url = _generate_presigned_url(s3_key)
 
+    content_type = {
+        "pdf": "application/pdf",
+        "md": "text/markdown",
+        "txt": "text/plain",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }.get(file_type, "application/octet-stream")
+
     return createResponse(
         200,
         "Skill created successfully",
-        {"skill": item, "upload_url": upload_url},
+        {"skill": item, "upload_url": upload_url, "content_type": content_type},
     )
 
 

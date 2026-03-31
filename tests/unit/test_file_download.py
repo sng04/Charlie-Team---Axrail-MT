@@ -28,9 +28,9 @@ class TestFileDownload:
         assert response["statusCode"] == 200
         assert "download_url" in body["data"]
 
-    @patch("lambdas.Functions.FileDownload.lambda_function.ALLOWED_BUCKETS", {"test-kb", "test-skills"})
+    @patch("lambdas.Functions.FileDownload.lambda_function._get_allowed_buckets", return_value={"test-kb", "test-skills"})
     @patch("lambdas.Functions.FileDownload.lambda_function.s3_client")
-    def test_success_skills_bucket(self, mock_s3):
+    def test_success_skills_bucket(self, mock_s3, mock_buckets):
         from lambdas.Functions.FileDownload.lambda_function import lambda_handler
 
         mock_s3.head_object.return_value = {}
@@ -54,8 +54,8 @@ class TestFileDownload:
         assert response["statusCode"] == 400
         assert body["status"] is False
 
-    @patch("lambdas.Functions.FileDownload.lambda_function.ALLOWED_BUCKETS", {"test-kb"})
-    def test_bucket_not_allowed(self):
+    @patch("lambdas.Functions.FileDownload.lambda_function._get_allowed_buckets", return_value={"test-kb"})
+    def test_bucket_not_allowed(self, mock_buckets):
         from lambdas.Functions.FileDownload.lambda_function import lambda_handler
 
         event = {"queryStringParameters": {"key": "doc.pdf", "bucket": "unknown-bucket"}}

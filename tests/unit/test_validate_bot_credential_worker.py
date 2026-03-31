@@ -59,7 +59,8 @@ class TestValidateBotCredentialWorker:
             mock_secrets.get_secret_value.return_value = {
                 "SecretString": json.dumps({"password": "app-pass"})
             }
-            with patch.object(mod, "_validate_smtp", return_value=(True, "")):
+            with patch.object(mod, "_validate_smtp", return_value=(True, "")), \
+                 patch.object(mod, "validate_email_domain", return_value=None):
                 event = {
                     "detail": {
                         "credential_id": "cred-1",
@@ -84,7 +85,8 @@ class TestValidateBotCredentialWorker:
                 "SecretString": json.dumps({"password": "bad-pass"})
             }
             error_msg = "Invalid email or password."
-            with patch.object(mod, "_validate_smtp", return_value=(False, error_msg)):
+            with patch.object(mod, "_validate_smtp", return_value=(False, error_msg)), \
+                 patch.object(mod, "validate_email_domain", return_value=None):
                 event = {
                     "detail": {
                         "credential_id": "cred-1",
@@ -100,14 +102,11 @@ class TestValidateBotCredentialWorker:
             _cleanup()
 
     def test_unsupported_email_domain(self):
-        """Unsupported domain returns failure with domain error message."""
+        """Unsupported domain is rejected at domain validation before SMTP check."""
         mock_table = MagicMock()
         mod, mock_secrets = _import_handler(mock_table)
         try:
-            mock_secrets.get_secret_value.return_value = {
-                "SecretString": json.dumps({"password": "pass"})
-            }
-            with patch.object(mod, "_validate_smtp", return_value=(False, "Unsupported email domain: custom.local")):
+            with patch.object(mod, "validate_email_domain", return_value="Email domain 'custom.local' resolves to a private or reserved address"):
                 event = {
                     "detail": {
                         "credential_id": "cred-1",
@@ -115,9 +114,9 @@ class TestValidateBotCredentialWorker:
                     }
                 }
                 response = mod.lambda_handler(event, None)
-                assert response["statusCode"] == 200
+                assert response["statusCode"] == 400
                 call_kwargs = mock_table.update_item.call_args[1]
-                assert call_kwargs["ExpressionAttributeValues"][":status"] == "verification_failed"
+                assert call_kwargs["ExpressionAttributeValues"][":status"] == "invalid"
         finally:
             _cleanup()
 

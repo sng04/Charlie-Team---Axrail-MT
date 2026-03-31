@@ -17,6 +17,7 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError, UnauthorizedError
+from url_validation import validate_meeting_link
 
 logger = Logger()
 tracer = Tracer()
@@ -92,6 +93,11 @@ def lambda_handler(event, context):
             if not is_admin and not _is_user_assigned_to_project(user_id, data["project_id"]):
                 raise UnauthorizedError("You don't have access to the target project")
         
+        if "meeting_link" in data and data["meeting_link"]:
+            error = validate_meeting_link(data["meeting_link"])
+            if error:
+                raise BadRequestError(error)
+
         allowed_fields = ["name", "description", "meeting_link", "status", 
                          "start_time", "end_time", "project_id"]
         update_data = {k: v for k, v in data.items() if k in allowed_fields}

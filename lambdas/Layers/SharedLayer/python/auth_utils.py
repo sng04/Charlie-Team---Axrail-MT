@@ -15,8 +15,118 @@ USER_POOL_ID = os.environ.get("USER_POOL_ID")
 CLIENT_ID = os.environ.get("CLIENT_ID")
 DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 
+# Account lockout settings
+MAX_FAILED_ATTEMPTS = 3
+LOCKOUT_DURATION_MINUTES = 30
+
+
+def _get_users_table():
+    return dynamodb.Table(DYNAMODB_TABLE)
+
+
+def _check_account_lockout(username: str) -> None:
+    """Check if the account is locked due to failed login attempts.
+
+    Raises UnauthorizedError if locked.
+    """
+    try:
+        from boto3.dynamodb.conditions import Attr
+
+        table = _get_users_table()
+        resp = table.scan(
+            FilterExpression=Attr("username").eq(username) | Attr("email").eq(username),
+            ProjectionExpression="user_id, failed_login_attempts, locked_until",
+        )
+        items = resp.get("Items", [])
+        if not items:
+            return
+
+        user = items[0]
+        locked_until = user.get("locked_until", "")
+
+        if locked_until:
+            from datetime import timezone
+            lock_time = datetime.fromisoformat(locked_until.replace("Z", "+00:00"))
+            now = datetime.now(timezone.utc)
+            if now < lock_time:
+                remaining = int((lock_time - now).total_seconds() // 60) + 1
+                raise UnauthorizedError(
+                    f"Account locked due to too many failed attempts. Try again in {remaining} minutes."
+                )
+            # Lock expired — reset
+            table.update_item(
+                Key={"user_id": user["user_id"]},
+                UpdateExpression="SET failed_login_attempts = :z REMOVE locked_until",
+                ExpressionAttributeValues={":z": 0},
+            )
+    except UnauthorizedError:
+        raise
+    except Exception:
+        pass
+
+
+def _record_failed_login(username: str) -> None:
+    """Increment failed login counter and lock account if threshold reached."""
+    try:
+        from boto3.dynamodb.conditions import Attr
+        from datetime import timedelta, timezone
+
+        table = _get_users_table()
+        resp = table.scan(
+            FilterExpression=Attr("username").eq(username) | Attr("email").eq(username),
+            ProjectionExpression="user_id, failed_login_attempts",
+        )
+        items = resp.get("Items", [])
+        if not items:
+            return
+
+        user = items[0]
+        new_count = int(user.get("failed_login_attempts", 0)) + 1
+
+        if new_count >= MAX_FAILED_ATTEMPTS:
+            locked_until = (datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_DURATION_MINUTES)).isoformat()
+            table.update_item(
+                Key={"user_id": user["user_id"]},
+                UpdateExpression="SET failed_login_attempts = :c, locked_until = :l",
+                ExpressionAttributeValues={":c": new_count, ":l": locked_until},
+            )
+        else:
+            table.update_item(
+                Key={"user_id": user["user_id"]},
+                UpdateExpression="SET failed_login_attempts = :c",
+                ExpressionAttributeValues={":c": new_count},
+            )
+    except Exception:
+        pass
+
+
+def _reset_failed_login(username: str) -> None:
+    """Reset failed login counter on successful login."""
+    try:
+        from boto3.dynamodb.conditions import Attr
+
+        table = _get_users_table()
+        resp = table.scan(
+            FilterExpression=Attr("username").eq(username) | Attr("email").eq(username),
+            ProjectionExpression="user_id, failed_login_attempts, locked_until",
+        )
+        items = resp.get("Items", [])
+        if not items:
+            return
+
+        user = items[0]
+        if int(user.get("failed_login_attempts", 0)) > 0 or user.get("locked_until"):
+            table.update_item(
+                Key={"user_id": user["user_id"]},
+                UpdateExpression="SET failed_login_attempts = :z REMOVE locked_until",
+                ExpressionAttributeValues={":z": 0},
+            )
+    except Exception:
+        pass
+
 
 def admin_login(username: str, password: str) -> dict:
+    _check_account_lockout(username)
     try:
         response = cognito_client.initiate_auth(
             ClientId=CLIENT_ID,
@@ -34,6 +144,7 @@ def admin_login(username: str, password: str) -> dict:
                 "username": username,
             }
         
+        _reset_failed_login(username)
         return {
             "access_token": response["AuthenticationResult"]["AccessToken"],
             "id_token": response["AuthenticationResult"]["IdToken"],
@@ -42,6 +153,7 @@ def admin_login(username: str, password: str) -> dict:
             "expires_in": response["AuthenticationResult"]["ExpiresIn"],
         }
     except cognito_client.exceptions.NotAuthorizedException:
+        _record_failed_login(username)
         raise UnauthorizedError("Invalid username or password")
     except cognito_client.exceptions.UserNotFoundException:
         raise NotFoundError("User not found")
@@ -129,6 +241,7 @@ def save_user_to_dynamodb(user_data: dict) -> dict:
 
 
 def user_login(username: str, password: str) -> dict:
+    _check_account_lockout(username)
     try:
         response = cognito_client.initiate_auth(
             ClientId=CLIENT_ID,
@@ -146,6 +259,7 @@ def user_login(username: str, password: str) -> dict:
                 "username": username,
             }
         
+        _reset_failed_login(username)
         return {
             "access_token": response["AuthenticationResult"]["AccessToken"],
             "id_token": response["AuthenticationResult"]["IdToken"],
@@ -154,6 +268,7 @@ def user_login(username: str, password: str) -> dict:
             "expires_in": response["AuthenticationResult"]["ExpiresIn"],
         }
     except cognito_client.exceptions.NotAuthorizedException:
+        _record_failed_login(username)
         raise UnauthorizedError("Invalid username or password")
     except cognito_client.exceptions.UserNotFoundException:
         raise NotFoundError("User not found")

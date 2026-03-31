@@ -18,6 +18,7 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, ConflictError
+from url_validation import validate_email_domain
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
@@ -48,6 +49,11 @@ def _validate_input(data: dict) -> None:
     email = data.get("email", "").strip()
     if not email or not EMAIL_REGEX.match(email):
         raise BadRequestError("Invalid email format")
+
+    # Validate email domain is not targeting internal resources
+    domain_error = validate_email_domain(email)
+    if domain_error:
+        raise BadRequestError(domain_error)
 
     # Validate password not empty
     password = data.get("password", "")

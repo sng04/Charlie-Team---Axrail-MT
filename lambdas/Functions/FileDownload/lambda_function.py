@@ -24,12 +24,17 @@ KB_BUCKET = os.environ.get("KB_BUCKET_NAME", "")
 SKILLS_BUCKET = os.environ.get("SKILLS_BUCKET_NAME", "")
 PRESIGNED_URL_EXPIRY = 900  # 15 minutes
 
-# Only allow downloads from known buckets
-ALLOWED_BUCKETS = set()
-if KB_BUCKET:
-    ALLOWED_BUCKETS.add(KB_BUCKET)
-if SKILLS_BUCKET:
-    ALLOWED_BUCKETS.add(SKILLS_BUCKET)
+
+def _get_allowed_buckets() -> set:
+    """Build allowed buckets set from env vars at call time (not module load)."""
+    buckets = set()
+    kb = os.environ.get("KB_BUCKET_NAME", "")
+    skills = os.environ.get("SKILLS_BUCKET_NAME", "")
+    if kb:
+        buckets.add(kb)
+    if skills:
+        buckets.add(skills)
+    return buckets
 
 
 def _get_content_type(key: str) -> str:
@@ -54,7 +59,7 @@ def lambda_handler(event, context):
         if not s3_key:
             raise BadRequestError("Missing required query parameter: key")
 
-        if bucket not in ALLOWED_BUCKETS:
+        if bucket not in _get_allowed_buckets():
             raise BadRequestError(f"Bucket not allowed: {bucket}")
 
         # Verify the object exists
