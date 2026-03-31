@@ -17,6 +17,7 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError, ConflictError
+from changelog_utils import log_admin_change
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
@@ -213,6 +214,10 @@ def lambda_handler(event, context):
         message = "Bot credential updated successfully"
         if needs_revalidation:
             message += ". Re-validating email credentials..."
+
+        log_admin_change(event, "bot_credential", credential_id, "update",
+                         data=update_data, previous_data=existing,
+                         changed_fields=list(update_data.keys()), entity_name=existing.get("email", ""))
 
         return createResponse(200, message, result)
     except BadRequestError as e:

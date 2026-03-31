@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError
+from changelog_utils import log_admin_change
 
 logger = Logger()
 tracer = Tracer()
@@ -111,6 +112,8 @@ def lambda_handler(event, context):
             else:
                 update_expression = "REMOVE " + ", ".join(remove_parts)
 
+        pre_update = table.get_item(Key={"project_id": project_id}).get("Item", {})
+
         response = table.update_item(
             Key={"project_id": project_id},
             UpdateExpression=update_expression,
@@ -119,6 +122,8 @@ def lambda_handler(event, context):
             ConditionExpression="attribute_exists(project_id)",
             ReturnValues="ALL_NEW",
         )
+
+        log_admin_change(event, "project", project_id, "update", data=update_data, previous_data=pre_update, changed_fields=list(update_data.keys()), entity_name=pre_update.get("name", ""))
 
         return createResponse(200, "Project updated successfully", response["Attributes"])
     except BadRequestError as e:

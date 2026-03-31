@@ -132,17 +132,18 @@ class TestValidateBotCredentialWorker:
             _cleanup()
 
     def test_get_smtp_server_known_domains(self):
-        """Known domains (gmail, outlook, yahoo) return correct SMTP configs."""
+        """Gmail domains return correct SMTP config; non-whitelisted return None."""
         mock_table = MagicMock()
         mod, _ = _import_handler(mock_table)
         try:
             gmail = mod._get_smtp_server("user@gmail.com")
             assert gmail["host"] == "smtp.gmail.com"
 
+            # Non-whitelisted domains return None (security restriction)
             outlook = mod._get_smtp_server("user@outlook.com")
-            assert outlook["host"] == "smtp.office365.com"
+            assert outlook is None
 
             yahoo = mod._get_smtp_server("user@yahoo.com")
-            assert yahoo["host"] == "smtp.mail.yahoo.com"
+            assert yahoo is None
         finally:
             _cleanup()

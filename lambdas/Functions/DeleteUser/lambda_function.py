@@ -13,6 +13,7 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError
+from changelog_utils import log_admin_change
 
 logger = Logger()
 tracer = Tracer()
@@ -66,6 +67,8 @@ def lambda_handler(event: dict, context: Any) -> dict:
         
         # Delete from DynamoDB
         table.delete_item(Key={"user_id": user_id})
+        
+        log_admin_change(event, "user", user_id, "delete", previous_data=user, entity_name=user.get("email", ""))
         
         logger.info(f"Deleted user {user_id}")
         return createResponse(200, "User deleted successfully")

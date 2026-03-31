@@ -18,8 +18,11 @@ QA_PAIRS_CRUD_DIR = os.path.abspath(
 SAMPLE_QA_PAIR = {
     "qa_pair_id": "qqqqqqqq-1111-2222-3333-444444444444",
     "session_id": "ssssssss-1111-2222-3333-444444444444",
+    "project_id": "pppppppp-1111-2222-3333-444444444444",
     "question": "What is the pricing?",
     "answer": "Enterprise tier starts at 2.1%",
+    "gsi_pk": "ALL",
+    "detected_at": "2026-03-31T10:35:41+00:00",
 }
 
 
@@ -74,13 +77,15 @@ class TestQAPairsHandler:
             assert response["statusCode"] == 200
             body = json.loads(response["body"])
             assert body["status"] is True
-            assert len(body["data"]) == 1
+            assert len(body["data"]["items"]) == 1
+            assert body["data"]["lastKey"] is None
         finally:
             _cleanup()
 
-    def test_list_qa_pairs_missing_params_returns_400(self):
-        """GET /qa-pairs without session_id or project_id returns 400."""
+    def test_list_all_qa_pairs_no_filters(self):
+        """GET /qa-pairs without filters returns 200 via created-at-index."""
         mock_table = MagicMock()
+        mock_table.query.return_value = {"Items": [SAMPLE_QA_PAIR]}
 
         handler_mod = _import_handler(mock_table)
         try:
@@ -91,10 +96,41 @@ class TestQAPairsHandler:
             }
             response = handler_mod.lambda_handler(event, None)
 
-            assert response["statusCode"] == 400
+            assert response["statusCode"] == 200
             body = json.loads(response["body"])
-            assert body["status"] is False
-            assert "session_id" in body["message"]
+            assert body["status"] is True
+            assert len(body["data"]["items"]) == 1
+
+            # Verify the GSI query was used
+            call_kwargs = mock_table.query.call_args[1]
+            assert call_kwargs["IndexName"] == "created-at-index"
+            assert call_kwargs["ScanIndexForward"] is False
+        finally:
+            _cleanup()
+
+    def test_list_qa_pairs_pagination(self):
+        """GET /qa-pairs returns lastKey when more pages exist."""
+        last_key = {"qa_pair_id": "abc", "gsi_pk": "ALL", "detected_at": "2026-03-31T00:00:00"}
+        mock_table = MagicMock()
+        mock_table.query.return_value = {
+            "Items": [SAMPLE_QA_PAIR],
+            "LastEvaluatedKey": last_key,
+        }
+
+        handler_mod = _import_handler(mock_table)
+        try:
+            event = {
+                "httpMethod": "GET",
+                "resource": "/qa-pairs",
+                "queryStringParameters": {"limit": "1"},
+            }
+            response = handler_mod.lambda_handler(event, None)
+
+            assert response["statusCode"] == 200
+            body = json.loads(response["body"])
+            assert body["data"]["lastKey"] is not None
+            decoded_key = json.loads(body["data"]["lastKey"])
+            assert decoded_key == last_key
         finally:
             _cleanup()
 

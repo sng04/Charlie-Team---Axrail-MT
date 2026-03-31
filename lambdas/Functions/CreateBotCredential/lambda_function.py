@@ -19,6 +19,7 @@ from botocore.exceptions import ClientError
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, ConflictError
 from url_validation import validate_email_domain
+from changelog_utils import log_admin_change
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
@@ -161,6 +162,8 @@ def lambda_handler(event, context):
         }
 
         table.put_item(Item=item)
+
+        log_admin_change(event, "bot_credential", credential_id, "create", data=item, entity_name=data["email"])
 
         return createResponse(
             200,

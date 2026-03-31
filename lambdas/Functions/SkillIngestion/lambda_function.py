@@ -119,32 +119,63 @@ def _index_document(client: OpenSearch, document: dict) -> None:
     _retry_with_backoff(_do_index)
 
 
+def _detect_file_type(file_bytes: bytes, key: str) -> str:
+    """Detect file type from magic bytes, falling back to extension.
+
+    Returns one of: 'pdf', 'docx', 'md', 'txt', or 'unknown'.
+    """
+    if file_bytes[:4] == b"%PDF":
+        return "pdf"
+    # DOCX/XLSX/PPTX are ZIP archives starting with PK
+    if file_bytes[:2] == b"PK":
+        return "docx"
+    # Fall back to extension
+    key_lower = key.lower()
+    if key_lower.endswith(".md"):
+        return "md"
+    if key_lower.endswith(".txt"):
+        return "txt"
+    if key_lower.endswith(".pdf"):
+        return "pdf"
+    if key_lower.endswith(".docx"):
+        return "docx"
+    return "unknown"
+
+
 @tracer.capture_method
 def _extract_text_from_file(s3_client, bucket: str, key: str) -> str:
-    """Extract text from a file based on its extension.
+    """Extract text from a file using magic-byte detection with extension fallback.
 
-    Supports .pdf (via PyPDF2), .md and .txt (raw UTF-8), and .docx (via python-docx).
+    Supports PDF (via PyPDF2), .md/.txt (raw UTF-8), and DOCX (via python-docx).
     """
     response = s3_client.get_object(Bucket=bucket, Key=key)
     file_bytes = response["Body"].read()
-    key_lower = key.lower()
+    file_type = _detect_file_type(file_bytes, key)
 
-    if key_lower.endswith(".md") or key_lower.endswith(".txt"):
+    logger.info("Detected file type", extra={"key": key, "file_type": file_type})
+
+    if file_type in ("md", "txt"):
         return file_bytes.decode("utf-8")
 
-    if key_lower.endswith(".docx"):
+    if file_type == "docx":
         from docx import Document
         doc = Document(BytesIO(file_bytes))
         return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
 
-    # Default: treat as PDF
-    reader = PdfReader(BytesIO(file_bytes))
-    text = ""
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text += page_text
-    return text
+    if file_type == "pdf":
+        reader = PdfReader(BytesIO(file_bytes))
+        text = ""
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text += page_text
+        return text
+
+    # Unknown type — try UTF-8 text as last resort
+    try:
+        return file_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(f"Unsupported file type for key: {key}")
 
 
 def _parse_skill_key(key: str) -> tuple:

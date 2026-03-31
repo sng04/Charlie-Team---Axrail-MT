@@ -20,8 +20,8 @@ class TestDynamoDBStack:
         stack = DynamoDBStack(app, "TestDynamoDBStack", env_name="dev")
         self.template = assertions.Template.from_stack(stack)
 
-    def test_fifteen_tables_created(self):
-        self.template.resource_count_is("AWS::DynamoDB::Table", 15)
+    def test_seventeen_tables_created(self):
+        self.template.resource_count_is("AWS::DynamoDB::Table", 17)
 
     def test_opensearch_domain_created(self):
         self.template.resource_count_is("AWS::OpenSearchService::Domain", 1)

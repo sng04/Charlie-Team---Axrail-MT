@@ -15,6 +15,7 @@ from boto3.dynamodb.conditions import Key
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError, ConflictError
+from changelog_utils import log_admin_change
 
 logger = Logger()
 tracer = Tracer()
@@ -83,6 +84,8 @@ def lambda_handler(event, context):
         }
         
         project_users_table.put_item(Item=item)
+        
+        log_admin_change(event, "project_user_assignment", project_user_id, "create", data=item, entity_name="")
         
         return createResponse(200, "User assigned to project successfully", item)
     except BadRequestError as e:

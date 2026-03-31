@@ -50,6 +50,7 @@ def _check_account_lockout(username: str) -> None:
             now = datetime.now(timezone.utc)
             if now < lock_time:
                 remaining = int((lock_time - now).total_seconds() // 60) + 1
+                _log_login_event(username, "login_locked", {"remaining_minutes": remaining})
                 raise UnauthorizedError(
                     f"Account locked due to too many failed attempts. Try again in {remaining} minutes."
                 )
@@ -125,6 +126,15 @@ def _reset_failed_login(username: str) -> None:
         pass
 
 
+def _log_login_event(username: str, action: str, data: dict = None) -> None:
+    """Log a login attempt to the audit changelog. Fire-and-forget."""
+    try:
+        from changelog_utils import log_audit_event
+        log_audit_event("login_attempt", username, action, data=data, username=username, entity_name=username)
+    except Exception:
+        pass
+
+
 def admin_login(username: str, password: str) -> dict:
     _check_account_lockout(username)
     try:
@@ -145,6 +155,7 @@ def admin_login(username: str, password: str) -> dict:
             }
         
         _reset_failed_login(username)
+        _log_login_event(username, "login_success")
         return {
             "access_token": response["AuthenticationResult"]["AccessToken"],
             "id_token": response["AuthenticationResult"]["IdToken"],
@@ -154,8 +165,10 @@ def admin_login(username: str, password: str) -> dict:
         }
     except cognito_client.exceptions.NotAuthorizedException:
         _record_failed_login(username)
+        _log_login_event(username, "login_failed", {"reason": "invalid_credentials"})
         raise UnauthorizedError("Invalid username or password")
     except cognito_client.exceptions.UserNotFoundException:
+        _log_login_event(username, "login_failed", {"reason": "user_not_found"})
         raise NotFoundError("User not found")
     except ClientError as e:
         raise BadRequestError(f"Authentication failed: {e.response['Error']['Message']}")
@@ -260,6 +273,7 @@ def user_login(username: str, password: str) -> dict:
             }
         
         _reset_failed_login(username)
+        _log_login_event(username, "login_success")
         return {
             "access_token": response["AuthenticationResult"]["AccessToken"],
             "id_token": response["AuthenticationResult"]["IdToken"],
@@ -269,8 +283,10 @@ def user_login(username: str, password: str) -> dict:
         }
     except cognito_client.exceptions.NotAuthorizedException:
         _record_failed_login(username)
+        _log_login_event(username, "login_failed", {"reason": "invalid_credentials"})
         raise UnauthorizedError("Invalid username or password")
     except cognito_client.exceptions.UserNotFoundException:
+        _log_login_event(username, "login_failed", {"reason": "user_not_found"})
         raise NotFoundError("User not found")
     except ClientError as e:
         raise BadRequestError(f"Authentication failed: {e.response['Error']['Message']}")

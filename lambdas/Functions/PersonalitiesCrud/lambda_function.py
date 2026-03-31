@@ -16,6 +16,7 @@ import boto3
 from aws_lambda_powertools import Logger, Tracer
 from boto3.dynamodb.conditions import Attr, Key
 
+from changelog_utils import log_admin_change
 from custom_exceptions import BadRequestError, ConflictError, NotFoundError
 from response_utils import createResponse
 
@@ -132,6 +133,7 @@ def create_personality(event: dict) -> dict:
         item[field] = data[field]
 
     personalities_table.put_item(Item=item)
+    log_admin_change(event, "personality", personality_id, "create", data=item, entity_name=item.get("personality_name", ""))
     return createResponse(200, "Personality created successfully", item)
 
 
@@ -171,6 +173,8 @@ def update_personality(event: dict) -> dict:
         ExpressionAttributeValues=values,
         ReturnValues="ALL_NEW",
     )
+    updates = {k: v for k, v in data.items() if k != "personality_id"}
+    log_admin_change(event, "personality", personality_id, "update", data=updates, changed_fields=list(updates.keys()), entity_name=resp["Item"].get("personality_name", ""))
     return createResponse(
         200, "Personality updated successfully", result["Attributes"]
     )
@@ -193,6 +197,7 @@ def delete_personality(event: dict) -> dict:
         )
 
     personalities_table.delete_item(Key={"personality_id": personality_id})
+    log_admin_change(event, "personality", personality_id, "delete", previous_data=resp.get("Item", {}), entity_name=resp.get("Item", {}).get("personality_name", ""))
     return createResponse(200, "Personality deleted successfully")
 
 

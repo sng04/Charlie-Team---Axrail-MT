@@ -82,6 +82,8 @@ _defaults = {
     "GAP_ANALYSIS_TABLE_NAME": "test-GapAnalysis",
     "KB_DOCUMENTS_TABLE_NAME": "test-KbDocuments",
     "COHERE_EMBED_MODEL_ID": "cohere.embed-english-v3",
+    "ADMIN_CHANGELOG_TABLE_NAME": "test-AdminChangelog",
+    "AGENT_CONFIG_HISTORY_TABLE_NAME": "test-AgentConfigHistory",
 }
 for k, v in _defaults.items():
     os.environ.setdefault(k, v)

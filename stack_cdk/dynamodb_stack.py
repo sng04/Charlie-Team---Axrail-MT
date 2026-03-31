@@ -34,6 +34,8 @@ class DynamoDBStack(Stack):
         self._create_gap_analysis_results_table()
         self._create_kb_documents_table()
         self._create_agent_config_history_table()
+        self._create_admin_changelog_table()
+        self._create_token_usage_table()
         # OpenSearch
         self._create_opensearch_domain()
         self._create_exports()
@@ -322,6 +324,19 @@ class DynamoDBStack(Stack):
             projection_type=dynamodb.ProjectionType.ALL,
         )
 
+        self.qa_pairs_table.add_global_secondary_index(
+            index_name="created-at-index",
+            partition_key=dynamodb.Attribute(
+                name="gsi_pk",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="detected_at",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
     def _create_suggested_questions_table(self) -> None:
         """Create SuggestedQuestions table for AI-generated questions."""
         self.suggested_questions_table = dynamodb.Table(
@@ -463,6 +478,60 @@ class DynamoDBStack(Stack):
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
+        )
+
+    def _create_admin_changelog_table(self) -> None:
+        """Create AdminChangelog table for audit trail of admin CRUD operations."""
+        self.admin_changelog_table = dynamodb.Table(
+            self,
+            "AdminChangelogTable",
+            table_name=f"{self.env_name}-AdminChangelog",
+            partition_key=dynamodb.Attribute(
+                name="changelog_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
+        )
+
+        self.admin_changelog_table.add_global_secondary_index(
+            index_name="entity-type-index",
+            partition_key=dynamodb.Attribute(
+                name="entity_type",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="timestamp",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
+    def _create_token_usage_table(self) -> None:
+        """Create TokenUsage table for tracking Bedrock model token consumption."""
+        self.token_usage_table = dynamodb.Table(
+            self,
+            "TokenUsageTable",
+            table_name=f"{self.env_name}-TokenUsage",
+            partition_key=dynamodb.Attribute(
+                name="usage_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
+        )
+
+        self.token_usage_table.add_global_secondary_index(
+            index_name="session-index",
+            partition_key=dynamodb.Attribute(
+                name="session_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="timestamp",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            projection_type=dynamodb.ProjectionType.ALL,
         )
 
     def _create_opensearch_domain(self) -> None:

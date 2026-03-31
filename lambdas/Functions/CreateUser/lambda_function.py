@@ -11,6 +11,7 @@ from aws_lambda_powertools import Logger, Tracer
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError, ConflictError
 from auth_utils import create_user_by_admin
+from changelog_utils import log_admin_change
 
 logger = Logger()
 tracer = Tracer()
@@ -43,6 +44,8 @@ def lambda_handler(event, context):
         
         admin_email = _get_admin_email_from_context(event)
         result = create_user_by_admin(data["email"], admin_email)
+        
+        log_admin_change(event, "user", result.get("user_id", ""), "create", data=result, entity_name=result.get("email", ""))
         
         return createResponse(200, "User created successfully", result)
     except BadRequestError as e:

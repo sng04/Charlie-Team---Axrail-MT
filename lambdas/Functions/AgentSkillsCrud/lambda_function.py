@@ -13,6 +13,7 @@ import boto3
 from aws_lambda_powertools import Logger, Tracer
 from boto3.dynamodb.conditions import Key
 
+from changelog_utils import log_admin_change
 from custom_exceptions import BadRequestError, NotFoundError
 from response_utils import createResponse
 
@@ -22,11 +23,96 @@ tracer = Tracer()
 AGENTS_TABLE_NAME = os.environ.get("AGENTS_TABLE_NAME", "")
 SKILLS_TABLE_NAME = os.environ.get("SKILLS_TABLE_NAME", "")
 AGENT_SKILLS_TABLE_NAME = os.environ.get("AGENT_SKILLS_TABLE_NAME", "")
+AGENT_CONFIG_HISTORY_TABLE_NAME = os.environ.get("AGENT_CONFIG_HISTORY_TABLE_NAME", "")
+PERSONALITIES_TABLE_NAME = os.environ.get("PERSONALITIES_TABLE_NAME", "")
 
 dynamodb = boto3.resource("dynamodb")
 agents_table = dynamodb.Table(AGENTS_TABLE_NAME)
 skills_table = dynamodb.Table(SKILLS_TABLE_NAME)
 agent_skills_table = dynamodb.Table(AGENT_SKILLS_TABLE_NAME)
+history_table = dynamodb.Table(AGENT_CONFIG_HISTORY_TABLE_NAME) if AGENT_CONFIG_HISTORY_TABLE_NAME else None
+
+
+def _save_agent_snapshot(agent_id: str, changed_fields: list) -> None:
+    """Save a config history snapshot when skills change.
+
+    Includes a 5-second debounce: if a snapshot was written for this agent
+    within the last 5 seconds, skip to avoid duplicates when the frontend
+    fires multiple API calls for a single user action.
+    """
+    if not history_table:
+        return
+    try:
+        # Get current agent config
+        agent_resp = agents_table.get_item(Key={"agent_id": agent_id})
+        agent = agent_resp.get("Item", {})
+        if not agent:
+            return
+
+        # Get latest version + debounce check
+        resp = history_table.query(
+            KeyConditionExpression=Key("agent_id").eq(agent_id),
+            ScanIndexForward=False,
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        next_version = int(items[0]["version"]) + 1 if items else 1
+
+        # Debounce: skip if last snapshot was within 5 seconds
+        if items:
+            last_snapshot_at = items[0].get("snapshot_at", "")
+            if last_snapshot_at:
+                from datetime import datetime as dt
+                try:
+                    last_time = dt.fromisoformat(last_snapshot_at.replace("Z", "+00:00"))
+                    now_time = dt.now(timezone.utc)
+                    if (now_time - last_time).total_seconds() < 5:
+                        return  # Skip — recent snapshot exists
+                except (ValueError, TypeError):
+                    pass
+
+        # Get personality name
+        personality_name = ""
+        pid = agent.get("personality_id", "")
+        if pid and PERSONALITIES_TABLE_NAME:
+            try:
+                pr = dynamodb.Table(PERSONALITIES_TABLE_NAME).get_item(
+                    Key={"personality_id": pid}, ProjectionExpression="personality_name"
+                )
+                personality_name = pr.get("Item", {}).get("personality_name", "")
+            except Exception:
+                pass
+
+        # Get current skill names
+        skill_names = []
+        try:
+            jr = agent_skills_table.query(KeyConditionExpression=Key("agent_id").eq(agent_id))
+            for j in jr.get("Items", []):
+                sr = skills_table.get_item(Key={"skill_id": j["skill_id"]}, ProjectionExpression="skill_name")
+                name = sr.get("Item", {}).get("skill_name")
+                if name:
+                    skill_names.append(name)
+        except Exception:
+            pass
+
+        now = datetime.now(timezone.utc).isoformat()
+        history_table.put_item(Item={
+            "agent_id": agent_id,
+            "version": next_version,
+            "agent_name": agent.get("agent_name", ""),
+            "role_prompt": agent.get("role_prompt", ""),
+            "behavior_guidelines": agent.get("behavior_guidelines", ""),
+            "personality_id": pid,
+            "personality_name": personality_name,
+            "model_id": agent.get("model_id", ""),
+            "use_case": agent.get("use_case", ""),
+            "skill_names": skill_names,
+            "changed_fields": changed_fields,
+            "created_at": agent.get("created_at", ""),
+            "snapshot_at": now,
+        })
+    except Exception:
+        logger.warning("Failed to save agent config snapshot", extra={"agent_id": agent_id})
 
 
 def assign_skill(event: dict) -> dict:
@@ -59,6 +145,9 @@ def assign_skill(event: dict) -> dict:
         "assigned_at": now,
     }
     agent_skills_table.put_item(Item=item)
+    log_admin_change(event, "agent_skill_assignment", f"{agent_id}:{skill_id}", "create", data=item, entity_name="")
+
+    _save_agent_snapshot(agent_id, ["skills_assigned"])
 
     return createResponse(200, "Skill assigned", item)
 
@@ -78,6 +167,9 @@ def unassign_skill(event: dict) -> dict:
     agent_skills_table.delete_item(
         Key={"agent_id": agent_id, "skill_id": skill_id}
     )
+    log_admin_change(event, "agent_skill_assignment", f"{agent_id}:{skill_id}", "delete", previous_data=resp["Item"], entity_name="")
+
+    _save_agent_snapshot(agent_id, ["skills_unassigned"])
 
     return createResponse(200, "Skill unassigned")
 

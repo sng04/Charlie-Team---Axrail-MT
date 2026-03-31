@@ -62,6 +62,7 @@ class ApiServicesStack(Stack):
         self._create_kb_document_routes()
         self._create_file_download_routes()
         self._create_qa_routes()
+        self._create_admin_changelog_routes()
         self._create_exports()
 
     def _create_api_gateway(self) -> None:
@@ -410,6 +411,15 @@ class ApiServicesStack(Stack):
             authorizer=self.auth_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
+
+        # GET /sessions/{sessionId}/token-usage
+        token_usage_resource = session_resource.add_resource("token-usage")
+        token_usage_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.token_usage_fn),
+            authorizer=self.auth_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
         
         # GET /projects/{projectId}/sessions - Get sessions for project (authenticated users)
         projects_resource = self.api.root.get_resource("projects")
@@ -718,6 +728,15 @@ class ApiServicesStack(Stack):
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
 
+        # Alias: POST /skills/{skillId}/replace (for frontend compatibility)
+        replace_alias_resource = skill_resource.add_resource("replace")
+        replace_alias_resource.add_method(
+            "POST",
+            apigw.LambdaIntegration(self.lambda_stack.skills_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
     def _create_kb_document_routes(self) -> None:
         """Create KB Document CRUD API routes under /projects/{projectId}/kb-documents."""
         projects_resource = self.api.root.get_resource("projects")
@@ -800,6 +819,45 @@ class ApiServicesStack(Stack):
         qa_pair_resource.add_method(
             "DELETE",
             apigw.LambdaIntegration(self.lambda_stack.qa_pairs_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+    def _create_admin_changelog_routes(self) -> None:
+        """Create admin changelog retrieval route: GET /admin/changelog."""
+        admin_resource = self.api.root.add_resource("admin")
+        changelog_resource = admin_resource.add_resource("changelog")
+
+        changelog_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.admin_changelog_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        # Token usage routes under /admin/token-usage
+        token_usage_resource = admin_resource.add_resource("token-usage")
+
+        summary_resource = token_usage_resource.add_resource("summary")
+        summary_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.token_usage_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        daily_resource = token_usage_resource.add_resource("daily")
+        daily_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.token_usage_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        by_project_resource = token_usage_resource.add_resource("by-project")
+        by_project_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.token_usage_fn),
             authorizer=self.admin_authorizer,
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )

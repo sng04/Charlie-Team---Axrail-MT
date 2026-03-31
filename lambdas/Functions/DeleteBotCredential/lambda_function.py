@@ -14,6 +14,7 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError, ConflictError
+from changelog_utils import log_admin_change
 
 logger = Logger()
 tracer = Tracer()
@@ -77,12 +78,18 @@ def lambda_handler(event, context):
     try:
         credential_id = _get_credential_id(event)
 
-        _verify_credential_exists(credential_id)
+        # Fetch before delete for changelog
+        pre_delete = table.get_item(Key={"credential_id": credential_id})
+        if "Item" not in pre_delete:
+            raise NotFoundError(f"Bot credential {credential_id} not found")
+
         _check_credential_in_use(credential_id)
 
         _delete_secret(credential_id)
 
         table.delete_item(Key={"credential_id": credential_id})
+
+        log_admin_change(event, "bot_credential", credential_id, "delete", previous_data=pre_delete["Item"], entity_name=pre_delete["Item"].get("email", ""))
 
         return createResponse(200, "Bot credential deleted successfully")
     except BadRequestError as e:

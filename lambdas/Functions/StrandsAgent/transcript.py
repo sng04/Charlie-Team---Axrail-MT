@@ -10,6 +10,7 @@ from strands.models.bedrock import BedrockModel
 
 from constants import BEDROCK_REGION, MATCH_THRESHOLD, SESSIONS_TABLE_NAME, TRANSCRIPTS_TABLE_NAME
 from helpers import _get_conn_data, _get_dynamodb, _post_to_connection, _broadcast_to_session
+from token_tracking import track_token_usage, _extract_token_usage
 from question_detection import _detect_question, _generate_suggested_response
 from speaker_classification import classify_line_role, init_role_classifier
 from tools import _generate_embedding
@@ -74,6 +75,8 @@ def _classify_speakers(lines: list, conn_data: dict) -> tuple[dict, str]:
             tools=[],
         )
         result = agent(f"Classify speakers:\n{transcript_sample}")
+        inp, out = _extract_token_usage(result)
+        track_token_usage("", "speakerClassify", "amazon.nova-pro-v1:0", inp, out)
         parsed = json.loads(str(result))
         return parsed.get("role_map", {}), parsed.get("confidence", "low")
     except Exception:

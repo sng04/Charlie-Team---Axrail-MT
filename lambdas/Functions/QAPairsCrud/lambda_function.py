@@ -4,6 +4,7 @@ Routes HTTP methods for the /qa-pairs resource, providing list, get,
 and delete operations against the QAPairsTable DynamoDB table.
 """
 
+import json
 import os
 
 import boto3
@@ -21,31 +22,59 @@ QA_PAIRS_TABLE_NAME = os.environ.get("QA_PAIRS_TABLE_NAME", "")
 dynamodb = boto3.resource("dynamodb")
 qa_pairs_table = dynamodb.Table(QA_PAIRS_TABLE_NAME)
 
+MAX_LIMIT = 100
+DEFAULT_LIMIT = 20
+
+
+def _parse_last_key(raw: str) -> dict:
+    """Decode a JSON-encoded ExclusiveStartKey from the client."""
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        raise BadRequestError("Invalid lastKey format")
+
 
 def list_qa_pairs(event: dict) -> dict:
-    """Query QA pairs by session_id or project_id via the appropriate GSI."""
+    """Query QA pairs with optional session_id / project_id filters.
+
+    When neither filter is provided, returns all QA pairs sorted by
+    created_at descending via the created-at-index GSI.
+    """
     params = event.get("queryStringParameters") or {}
     session_id = params.get("session_id")
     project_id = params.get("project_id")
+    limit = min(int(params.get("limit", DEFAULT_LIMIT)), MAX_LIMIT)
+    last_key_raw = params.get("lastKey")
 
-    if not session_id and not project_id:
-        raise BadRequestError(
-            "session_id or project_id query parameter required"
-        )
+    query_kwargs = {"Limit": limit}
+
+    if last_key_raw:
+        query_kwargs["ExclusiveStartKey"] = _parse_last_key(last_key_raw)
 
     if session_id:
-        resp = qa_pairs_table.query(
-            IndexName="session-index",
-            KeyConditionExpression=Key("session_id").eq(session_id),
-        )
+        query_kwargs["IndexName"] = "session-index"
+        query_kwargs["KeyConditionExpression"] = Key("session_id").eq(session_id)
+        query_kwargs["ScanIndexForward"] = False
+    elif project_id:
+        query_kwargs["IndexName"] = "project-index"
+        query_kwargs["KeyConditionExpression"] = Key("project_id").eq(project_id)
+        query_kwargs["ScanIndexForward"] = False
     else:
-        resp = qa_pairs_table.query(
-            IndexName="project-index",
-            KeyConditionExpression=Key("project_id").eq(project_id),
-        )
+        query_kwargs["IndexName"] = "created-at-index"
+        query_kwargs["KeyConditionExpression"] = Key("gsi_pk").eq("ALL")
+        query_kwargs["ScanIndexForward"] = False
 
-    items = resp.get("Items", [])
-    return createResponse(200, "QA pairs retrieved successfully", items)
+    resp = qa_pairs_table.query(**query_kwargs)
+
+    result = {
+        "items": resp.get("Items", []),
+        "lastKey": None,
+    }
+
+    if "LastEvaluatedKey" in resp:
+        result["lastKey"] = json.dumps(resp["LastEvaluatedKey"])
+
+    return createResponse(200, "QA pairs retrieved successfully", result)
 
 
 def get_qa_pair(event: dict) -> dict:

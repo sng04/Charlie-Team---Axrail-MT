@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError, NotFoundError
+from changelog_utils import log_admin_change
 
 logger = Logger()
 tracer = Tracer()
@@ -83,6 +84,8 @@ def lambda_handler(event: dict, context: Any) -> dict:
         user["updated_at"] = datetime.utcnow().isoformat()
         
         table.put_item(Item=user)
+        
+        log_admin_change(event, "user", user_id, "update", data=data, previous_data=user, changed_fields=list(data.keys()), entity_name=user.get("email", ""))
         
         logger.info(f"Updated user {user_id}")
         return createResponse(200, "User updated successfully", user)

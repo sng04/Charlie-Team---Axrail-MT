@@ -15,6 +15,7 @@ from boto3.dynamodb.conditions import Attr, Key
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError
+from changelog_utils import log_admin_change
 
 logger = Logger()
 tracer = Tracer()
@@ -64,6 +65,8 @@ def lambda_handler(event, context):
         }
         
         table.put_item(Item=item)
+        
+        log_admin_change(event, "project", project_id, "create", data=item, entity_name=item.get("name", ""))
         
         return createResponse(200, "Project created successfully", item)
     except BadRequestError as e:

@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError
+from changelog_utils import log_admin_change
 
 logger = Logger()
 tracer = Tracer()
@@ -150,6 +151,8 @@ def lambda_handler(event, context):
         user_count = _delete_project_users(project_id)
 
         projects_table.delete_item(Key={"project_id": project_id})
+
+        log_admin_change(event, "project", project_id, "delete", previous_data=response["Item"], entity_name=response["Item"].get("name", ""))
 
         logger.info(
             "Project deleted with cascade",

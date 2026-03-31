@@ -6,6 +6,7 @@ update, and delete operations against the SkillsTable DynamoDB table.
 
 import json
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from math import ceil
@@ -14,6 +15,7 @@ import boto3
 from aws_lambda_powertools import Logger, Tracer
 from boto3.dynamodb.conditions import Attr, Key
 
+from changelog_utils import log_admin_change
 from custom_exceptions import BadRequestError, NotFoundError
 from response_utils import createResponse
 
@@ -176,6 +178,7 @@ def create_skill(event: dict) -> dict:
     }
 
     skills_table.put_item(Item=item)
+    log_admin_change(event, "skill", skill_id, "create", data=item, entity_name=item.get("skill_name", ""))
     upload_url = _generate_presigned_url(s3_key)
 
     content_type = {
@@ -222,6 +225,7 @@ def update_skill(event: dict) -> dict:
         ExpressionAttributeValues=values,
         ReturnValues="ALL_NEW",
     )
+    log_admin_change(event, "skill", skill_id, "update", data=updates, changed_fields=list(updates.keys()), entity_name=data.get("skill_name", ""))
     return createResponse(200, "Skill updated successfully", result["Attributes"])
 
 
@@ -253,6 +257,7 @@ def delete_skill(event: dict) -> dict:
         logger.exception("Failed to delete junction records for skill %s", skill_id)
 
     skills_table.delete_item(Key={"skill_id": skill_id})
+    log_admin_change(event, "skill", skill_id, "delete", previous_data=item, entity_name=item.get("skill_name", ""))
 
     if s3_key:
         try:
@@ -269,43 +274,87 @@ def replace_document(event: dict) -> dict:
     Deleting the S3 object triggers SkillDeletion Lambda which removes old
     vectors from OpenSearch. Uploading the new file triggers SkillIngestion
     which re-indexes the content.
+
+    Uses a distinct S3 key for the replacement to guarantee S3 fires a new
+    OBJECT_CREATED event (same-key delete+create can miss notifications).
     """
     skill_id = event.get("pathParameters", {}).get("skillId", "")
+    data = _parse_body(event)
 
     resp = skills_table.get_item(Key={"skill_id": skill_id})
     item = resp.get("Item")
     if not item:
         raise NotFoundError("Skill not found")
 
-    s3_key = item.get("s3_key", "")
-    if not s3_key:
+    old_s3_key = item.get("s3_key", "")
+    if not old_s3_key:
         raise BadRequestError("Skill has no associated document")
+
+    # Determine new file name: use request body if provided, else keep original
+    new_file_name = data.get("file_name", "")
+    if not new_file_name:
+        # Extract original filename from old key ({skill_id}/{filename})
+        new_file_name = old_s3_key.split("/", 1)[-1] if "/" in old_s3_key else old_s3_key
+
+    # Ensure a distinct S3 key so S3 fires a new OBJECT_CREATED event.
+    # If the new filename matches the old key, add or increment a (N) suffix.
+    candidate_key = f"{skill_id}/{new_file_name}"
+    if candidate_key == old_s3_key:
+        base, dot, ext = new_file_name.rpartition(".")
+        if not dot:
+            base, ext = new_file_name, ""
+        # Check for existing (N) suffix
+        match = re.search(r" \((\d+)\)$", base)
+        if match:
+            n = int(match.group(1)) + 1
+            base = base[: match.start()] + f" ({n})"
+        else:
+            base = f"{base} (2)"
+        new_file_name = f"{base}.{ext}" if dot else base
+    new_s3_key = f"{skill_id}/{new_file_name}"
 
     # Delete old S3 object → triggers SkillDeletion → cleans OpenSearch
     try:
-        s3_client.delete_object(Bucket=SKILLS_BUCKET_NAME, Key=s3_key)
-        logger.info("Deleted old document", extra={"s3_key": s3_key})
+        s3_client.delete_object(Bucket=SKILLS_BUCKET_NAME, Key=old_s3_key)
+        logger.info("Deleted old document", extra={"old_s3_key": old_s3_key})
     except Exception:
-        logger.exception("Failed to delete old S3 object", extra={"s3_key": s3_key})
+        logger.exception("Failed to delete old S3 object", extra={"s3_key": old_s3_key})
 
-    # Reset skill status to pending
+    # Update skill record with new key and reset status to pending
+    now = datetime.now(timezone.utc).isoformat()
+    file_ext = new_file_name.rsplit(".", 1)[-1].lower() if "." in new_file_name else ""
     skills_table.update_item(
         Key={"skill_id": skill_id},
-        UpdateExpression="SET #status = :s, #updated = :u",
-        ExpressionAttributeNames={"#status": "status", "#updated": "updated_at"},
+        UpdateExpression="SET #status = :s, #updated = :u, #s3key = :k, #ft = :ft",
+        ExpressionAttributeNames={
+            "#status": "status",
+            "#updated": "updated_at",
+            "#s3key": "s3_key",
+            "#ft": "file_type",
+        },
         ExpressionAttributeValues={
             ":s": "pending",
-            ":u": datetime.now(timezone.utc).isoformat(),
+            ":u": now,
+            ":k": new_s3_key,
+            ":ft": file_ext,
         },
     )
 
-    # Generate new upload URL for the same S3 key
-    upload_url = _generate_presigned_url(s3_key)
+    # Generate upload URL for the new distinct S3 key
+    upload_url = _generate_presigned_url(new_s3_key)
+
+    content_type = {
+        "pdf": "application/pdf",
+        "md": "text/markdown",
+        "txt": "text/plain",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    }.get(file_ext, "application/octet-stream")
 
     return createResponse(200, "Upload new document to replace the existing one", {
         "skill_id": skill_id,
-        "s3_key": s3_key,
+        "s3_key": new_s3_key,
         "upload_url": upload_url,
+        "content_type": content_type,
     })
 
 
@@ -327,6 +376,8 @@ def lambda_handler(event, context):
         elif resource == "/skills/{skillId}" and http_method == "DELETE":
             return delete_skill(event)
         elif resource == "/skills/{skillId}/replace-document" and http_method == "POST":
+            return replace_document(event)
+        elif resource == "/skills/{skillId}/replace" and http_method == "POST":
             return replace_document(event)
         else:
             raise BadRequestError(f"Unsupported route: {http_method} {resource}")

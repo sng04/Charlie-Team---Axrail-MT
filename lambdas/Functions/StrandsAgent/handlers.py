@@ -8,6 +8,7 @@ from strands import Agent
 from strands.models.bedrock import BedrockModel
 
 from constants import BEDROCK_REGION, TASK_PROMPTS
+from token_tracking import track_token_usage, _extract_token_usage
 from helpers import (
     _connection_prompts,
     _get_conn_data,
@@ -158,6 +159,8 @@ def _handle_send_message(body: dict, connection_id: str) -> dict:
             f"{message}"
         )
         result = agent(enriched_message)
+        inp, out = _extract_token_usage(result)
+        track_token_usage(session_id, "sendMessage", "amazon.nova-pro-v1:0", inp, out, project_id)
 
         _post_to_connection(connection_id, {
             "type": "response",
@@ -220,6 +223,8 @@ def _handle_detect_question(body: dict, connection_id: str) -> dict:
             f"Question: {question}"
         )
         result = agent(enriched)
+        inp, out = _extract_token_usage(result)
+        track_token_usage(session_id, "detectQuestion", "amazon.nova-pro-v1:0", inp, out, project_id)
 
         _post_to_connection(connection_id, {
             "type": "questionResponse",
@@ -272,6 +277,8 @@ def _handle_extract_qa_pair(body: dict, connection_id: str) -> dict:
             f"Answer: {answer}"
         )
         result = agent(enriched)
+        inp, out = _extract_token_usage(result)
+        track_token_usage(session_id, "extractQAPair", "amazon.nova-pro-v1:0", inp, out, project_id)
 
         _post_to_connection(connection_id, {
             "type": "qaPairSaved",
@@ -346,6 +353,8 @@ def _handle_analyze_gaps(body: dict, connection_id: str) -> dict:
             f"Analyze knowledge gaps for session {session_id}."
         )
         result = agent(enriched)
+        inp, out = _extract_token_usage(result)
+        track_token_usage(session_id, "analyzeGaps", "amazon.nova-pro-v1:0", inp, out, project_id)
 
         try:
             analysis = json.loads(str(result))
@@ -417,6 +426,8 @@ def _handle_end_meeting(body: dict, connection_id: str) -> dict:
             f"Generate a meeting summary for session {session_id}."
         )
         result = agent(enriched)
+        inp, out = _extract_token_usage(result)
+        track_token_usage(session_id, "endMeeting", "amazon.nova-pro-v1:0", inp, out, project_id)
         summary_markdown = str(result)
 
         # Always save to S3 deterministically instead of relying on the agent
@@ -490,6 +501,8 @@ def _handle_retro_analysis(body: dict, connection_id: str) -> dict:
             f"Perform a retrospective analysis for session {session_id}."
         )
         result = agent(enriched)
+        inp, out = _extract_token_usage(result)
+        track_token_usage(session_id, "retroAnalysis", "amazon.nova-pro-v1:0", inp, out, project_id)
         feedback_text = str(result)
 
         conn_data["retro_context"] = {
@@ -556,6 +569,10 @@ def _handle_retro_chat(body: dict, connection_id: str) -> dict:
             f"{message}"
         )
         result = agent(enriched)
+        inp, out = _extract_token_usage(result)
+        session_id = retro_ctx["session_id"]
+        project_id = conn_data.get("project_id", "")
+        track_token_usage(session_id, "retroChat", "amazon.nova-pro-v1:0", inp, out, project_id)
 
         _post_to_connection(connection_id, {
             "type": "retroResponse",

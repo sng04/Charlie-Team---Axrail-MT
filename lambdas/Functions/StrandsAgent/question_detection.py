@@ -6,6 +6,7 @@ from strands.models.bedrock import BedrockModel
 
 from constants import BEDROCK_REGION, TASK_PROMPTS, _QUESTION_INDICATORS
 from helpers import _post_to_connection, _broadcast_to_session
+from token_tracking import track_token_usage, _extract_token_usage
 from tools import search_knowledge_base
 
 logger = Logger(child=True)
@@ -47,6 +48,8 @@ def _is_question_model(text: str) -> bool:
             tools=[],
         )
         result = agent(f'Is this a question? "{text}"')
+        inp, out = _extract_token_usage(result)
+        track_token_usage("", "questionClassify", "amazon.nova-pro-v1:0", inp, out)
         return str(result).strip().lower().startswith("yes")
     except Exception:
         logger.exception("Question classification failed")
@@ -97,6 +100,8 @@ def _generate_suggested_response(
             f"Client question: {question}"
         )
         result = agent(enriched)
+        inp, out = _extract_token_usage(result)
+        track_token_usage(session_id, "suggestResponse", "amazon.nova-pro-v1:0", inp, out, project_id)
         msg = {
             "type": "suggestedResponse",
             "question": question,

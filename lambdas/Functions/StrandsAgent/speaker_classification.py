@@ -16,6 +16,7 @@ import boto3
 from aws_lambda_powertools import Logger
 
 from constants import COHERE_EMBED_MODEL_ID, BEDROCK_REGION
+from token_tracking import track_token_usage
 
 logger = Logger(child=True)
 
@@ -100,6 +101,8 @@ def _embed_texts_cohere(
             }),
         )
         body = json.loads(response["body"].read())
+        total_chars = sum(len(t) for t in texts)
+        track_token_usage("", "cohereEmbed", "cohere.embed-english-v3", max(1, total_chars // 4), 0, estimated=True)
         return body.get("embeddings", [])
     except Exception:
         logger.exception("Cohere Embed call failed")

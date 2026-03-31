@@ -11,6 +11,7 @@ from boto3.dynamodb.conditions import Key
 from opensearchpy import OpenSearch, RequestsHttpConnection
 from requests_aws4auth import AWS4Auth
 from strands import tool
+from token_tracking import track_token_usage
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -106,6 +107,7 @@ def _generate_embedding(text: str) -> list:
         body=payload,
     )
     body = json.loads(response["body"].read())
+    track_token_usage("", "titanEmbed", "amazon.titan-embed-text-v2:0", max(1, len(text) // 4), 0, estimated=True)
     return body["embedding"]
 
 
@@ -217,6 +219,7 @@ def save_qa_pair(
                 "answer": answer,
                 "source": source,
                 "detected_at": detected_at,
+                "gsi_pk": "ALL",
             }
         )
         return f"QA pair saved with id {qa_pair_id}"

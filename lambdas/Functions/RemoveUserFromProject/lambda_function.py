@@ -12,6 +12,7 @@ from botocore.exceptions import ClientError
 
 from response_utils import createResponse
 from custom_exceptions import BadRequestError
+from changelog_utils import log_admin_change
 
 logger = Logger()
 tracer = Tracer()
@@ -42,6 +43,8 @@ def lambda_handler(event, context):
         
         if "Attributes" not in response:
             return createResponse(404, f"Assignment {project_user_id} not found")
+        
+        log_admin_change(event, "project_user_assignment", project_user_id, "delete", previous_data=response.get("Attributes", {}), entity_name="")
         
         return createResponse(200, "User removed from project successfully")
     except BadRequestError as e:

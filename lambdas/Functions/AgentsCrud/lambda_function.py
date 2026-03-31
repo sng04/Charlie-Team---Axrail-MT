@@ -14,6 +14,7 @@ import boto3
 from aws_lambda_powertools import Logger, Tracer
 from boto3.dynamodb.conditions import Attr, Key
 
+from changelog_utils import log_admin_change
 from custom_exceptions import BadRequestError, ConflictError, NotFoundError
 from response_utils import createResponse
 
@@ -169,6 +170,7 @@ def create_agent(event: dict) -> dict:
         item[field] = data[field]
 
     agents_table.put_item(Item=item)
+    log_admin_change(event, "agent", agent_id, "create", data=item, entity_name=item.get("agent_name", ""))
     return createResponse(200, "Agent created successfully", item)
 
 
@@ -295,6 +297,7 @@ def update_agent(event: dict) -> dict:
         ExpressionAttributeValues=values,
         ReturnValues="ALL_NEW",
     )
+    log_admin_change(event, "agent", agent_id, "update", data=data, previous_data=pre_update_item, changed_fields=changed_fields, entity_name=pre_update_item.get("agent_name", ""))
     return createResponse(200, "Agent updated successfully", result["Attributes"])
 
 
@@ -322,6 +325,7 @@ def delete_agent(event: dict) -> dict:
         logger.exception("Failed to delete junction records for agent %s", agent_id)
 
     agents_table.delete_item(Key={"agent_id": agent_id})
+    log_admin_change(event, "agent", agent_id, "delete", previous_data=resp["Item"], entity_name=resp["Item"].get("agent_name", ""))
     return createResponse(200, "Agent deleted successfully")
 
 

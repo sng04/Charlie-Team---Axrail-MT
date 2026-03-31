@@ -331,6 +331,8 @@ class LambdaStack(Stack):
             "AGENT_SKILLS_TABLE_NAME": self.dynamodb_stack.agent_skills_table.table_name,
             "KB_DOCUMENTS_TABLE_NAME": self.dynamodb_stack.kb_documents_table.table_name,
             "AGENT_CONFIG_HISTORY_TABLE_NAME": self.dynamodb_stack.agent_config_history_table.table_name,
+            "ADMIN_CHANGELOG_TABLE_NAME": self.dynamodb_stack.admin_changelog_table.table_name,
+            "TOKEN_USAGE_TABLE_NAME": self.dynamodb_stack.token_usage_table.table_name,
         }
 
     def _create_lambda_function(
@@ -471,6 +473,14 @@ class LambdaStack(Stack):
 
         self.file_download_fn = self._create_lambda_function(
             "FileDownload", "lambdas/Functions/FileDownload"
+        )
+
+        self.admin_changelog_fn = self._create_lambda_function(
+            "AdminChangelog", "lambdas/Functions/AdminChangelog"
+        )
+
+        self.token_usage_fn = self._create_lambda_function(
+            "TokenUsage", "lambdas/Functions/TokenUsage"
         )
 
         # Meeting Bot functions
@@ -671,6 +681,8 @@ class LambdaStack(Stack):
             self.dynamodb_stack.agent_skills_table,
             self.dynamodb_stack.kb_documents_table,
             self.dynamodb_stack.agent_config_history_table,
+            self.dynamodb_stack.admin_changelog_table,
+            self.dynamodb_stack.token_usage_table,
         ]:
             table.grant_read_write_data(self.lambda_role)
 
