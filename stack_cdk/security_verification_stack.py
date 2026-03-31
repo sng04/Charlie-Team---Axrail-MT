@@ -9,6 +9,7 @@ CloudFront with the correct Content-Type and token payload.
 """
 
 import json
+import time
 
 from aws_cdk import (
     CfnOutput,
@@ -23,6 +24,11 @@ from aws_cdk import (
     custom_resources as cr,
 )
 from constructs import Construct
+
+# Epoch timestamp forces BucketDeployment custom resources to re-execute on
+# every ``cdk deploy``, guaranteeing the verification files are restored even
+# when a frontend sync deleted them out-of-band.
+_DEPLOY_EPOCH = str(int(time.time()))
 
 VERIFICATION_PAYLOAD = json.dumps(
     {"tokens": ["jP2oeFgO9BqJJGZmVvkSXA"]},
@@ -221,11 +227,14 @@ class SecurityVerificationStack(Stack):
 
         # --- Deploy verification files to S3 (with correct Content-Type) ---
 
+        # _DEPLOY_EPOCH in the marker file forces the custom resource to
+        # re-execute on every deploy, restoring files deleted out-of-band.
         s3deploy.BucketDeployment(
             self,
             "SecurityAgentFile",
             sources=[
                 s3deploy.Source.data("securityagent.json", VERIFICATION_PAYLOAD),
+                s3deploy.Source.data(".deploy-marker", _DEPLOY_EPOCH),
             ],
             destination_bucket=bucket,
             prune=False,
@@ -245,6 +254,7 @@ class SecurityVerificationStack(Stack):
                     ".well-known/aws/securityagent-domain-verification.json",
                     VERIFICATION_PAYLOAD,
                 ),
+                s3deploy.Source.data(".well-known/.deploy-marker", _DEPLOY_EPOCH),
             ],
             destination_bucket=bucket,
             prune=False,

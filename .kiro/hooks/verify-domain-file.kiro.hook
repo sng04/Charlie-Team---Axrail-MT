@@ -1,18 +1,16 @@
 {
   "enabled": true,
-  "name": "Domain Verification Check",
-  "description": "Runs the domain verification validator after any changes to CDK stack files or deployment scripts to ensure the .well-known verification file configuration is not broken.",
+  "name": "Domain Verification Regression Check",
+  "description": "After any shell command execution, checks if the command was a deployment (s3 sync, cdk deploy, or frontend deploy) and reminds the agent to verify the domain verification file still exists and is correctly served.",
   "version": "1",
   "when": {
-    "type": "fileEdited",
-    "patterns": [
-      "stack_cdk/security_verification_stack.py",
-      "stack_cdk/environment.py",
-      "app.py"
+    "type": "postToolUse",
+    "toolTypes": [
+      "shell"
     ]
   },
   "then": {
     "type": "askAgent",
-    "prompt": "The security verification stack or deployment config was modified. Check that: 1) SecurityVerificationStack is still instantiated in app.py with valid frontend_bucket_name and cloudfront_distribution_id, 2) The BucketDeployment in security_verification_stack.py still has prune=False and content_type='application/json', 3) The .well-known CloudFront behavior custom resource is still present. Report any issues found."
+    "prompt": "If the tool that just executed was a deployment command (e.g., aws s3 sync, cdk deploy, deploy_frontend.sh, or any S3/CloudFront operation), run: python3 scripts/verify_domain_verification.py --stability-rounds 3 to confirm the domain verification file at /.well-known/aws/securityagent-domain-verification.json was not deleted or overwritten. If verification fails, alert the user immediately."
   }
 }
