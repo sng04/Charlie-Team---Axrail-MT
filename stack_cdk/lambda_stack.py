@@ -330,6 +330,7 @@ class LambdaStack(Stack):
             "GAP_ANALYSIS_TABLE_NAME": self.dynamodb_stack.gap_analysis_results_table.table_name,
             "AGENT_SKILLS_TABLE_NAME": self.dynamodb_stack.agent_skills_table.table_name,
             "KB_DOCUMENTS_TABLE_NAME": self.dynamodb_stack.kb_documents_table.table_name,
+            "AGENT_CONFIG_HISTORY_TABLE_NAME": self.dynamodb_stack.agent_config_history_table.table_name,
         }
 
     def _create_lambda_function(
@@ -669,6 +670,7 @@ class LambdaStack(Stack):
             self.dynamodb_stack.gap_analysis_results_table,
             self.dynamodb_stack.agent_skills_table,
             self.dynamodb_stack.kb_documents_table,
+            self.dynamodb_stack.agent_config_history_table,
         ]:
             table.grant_read_write_data(self.lambda_role)
 

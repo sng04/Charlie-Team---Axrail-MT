@@ -33,6 +33,7 @@ class DynamoDBStack(Stack):
         self._create_agent_skills_table()
         self._create_gap_analysis_results_table()
         self._create_kb_documents_table()
+        self._create_agent_config_history_table()
         # OpenSearch
         self._create_opensearch_domain()
         self._create_exports()
@@ -444,6 +445,24 @@ class DynamoDBStack(Stack):
                 type=dynamodb.AttributeType.STRING,
             ),
             projection_type=dynamodb.ProjectionType.ALL,
+        )
+
+    def _create_agent_config_history_table(self) -> None:
+        """Create AgentConfigHistory table for versioned agent config snapshots."""
+        self.agent_config_history_table = dynamodb.Table(
+            self,
+            "AgentConfigHistoryTable",
+            table_name=f"{self.env_name}-AgentConfigHistory",
+            partition_key=dynamodb.Attribute(
+                name="agent_id",
+                type=dynamodb.AttributeType.STRING,
+            ),
+            sort_key=dynamodb.Attribute(
+                name="version",
+                type=dynamodb.AttributeType.NUMBER,
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
         )
 
     def _create_opensearch_domain(self) -> None:

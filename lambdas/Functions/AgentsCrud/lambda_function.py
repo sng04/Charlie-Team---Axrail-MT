@@ -23,11 +23,13 @@ tracer = Tracer()
 AGENTS_TABLE_NAME = os.environ.get("AGENTS_TABLE_NAME", "")
 PERSONALITIES_TABLE_NAME = os.environ.get("PERSONALITIES_TABLE_NAME", "")
 AGENT_SKILLS_TABLE_NAME = os.environ.get("AGENT_SKILLS_TABLE_NAME", "")
+AGENT_CONFIG_HISTORY_TABLE_NAME = os.environ.get("AGENT_CONFIG_HISTORY_TABLE_NAME", "")
 
 dynamodb = boto3.resource("dynamodb")
 agents_table = dynamodb.Table(AGENTS_TABLE_NAME)
 personalities_table = dynamodb.Table(PERSONALITIES_TABLE_NAME)
 agent_skills_table = dynamodb.Table(AGENT_SKILLS_TABLE_NAME)
+history_table = dynamodb.Table(AGENT_CONFIG_HISTORY_TABLE_NAME) if AGENT_CONFIG_HISTORY_TABLE_NAME else None
 
 REQUIRED_AGENT_FIELDS = [
     "agent_name",
@@ -170,6 +172,79 @@ def create_agent(event: dict) -> dict:
     return createResponse(200, "Agent created successfully", item)
 
 
+def _get_personality_name(personality_id: str) -> str:
+    """Look up personality name by ID."""
+    if not personality_id:
+        return ""
+    try:
+        resp = personalities_table.get_item(
+            Key={"personality_id": personality_id},
+            ProjectionExpression="personality_name",
+        )
+        return resp.get("Item", {}).get("personality_name", "")
+    except Exception:
+        return ""
+
+
+def _get_skill_names(agent_id: str) -> list:
+    """Look up active skill names for an agent."""
+    try:
+        jr = agent_skills_table.query(
+            KeyConditionExpression=Key("agent_id").eq(agent_id),
+        )
+        skill_ids = [item["skill_id"] for item in jr.get("Items", [])]
+        names = []
+        skills_table = dynamodb.Table(os.environ.get("SKILLS_TABLE_NAME", ""))
+        for sid in skill_ids:
+            r = skills_table.get_item(Key={"skill_id": sid}, ProjectionExpression="skill_name")
+            name = r.get("Item", {}).get("skill_name")
+            if name:
+                names.append(name)
+        return names
+    except Exception:
+        return []
+
+
+def _save_config_history(agent_id: str, pre_update_item: dict, changed_fields: list) -> None:
+    """Save a versioned snapshot of the agent config before an update."""
+    if not history_table:
+        return
+    try:
+        # Get next version number
+        resp = history_table.query(
+            KeyConditionExpression=Key("agent_id").eq(agent_id),
+            ScanIndexForward=False,
+            Limit=1,
+            ProjectionExpression="version",
+        )
+        items = resp.get("Items", [])
+        next_version = int(items[0]["version"]) + 1 if items else 1
+
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Build snapshot with resolved names
+        snapshot = {
+            "agent_id": agent_id,
+            "version": next_version,
+            "agent_name": pre_update_item.get("agent_name", ""),
+            "role_prompt": pre_update_item.get("role_prompt", ""),
+            "behavior_guidelines": pre_update_item.get("behavior_guidelines", ""),
+            "personality_id": pre_update_item.get("personality_id", ""),
+            "personality_name": _get_personality_name(pre_update_item.get("personality_id", "")),
+            "model_id": pre_update_item.get("model_id", ""),
+            "use_case": pre_update_item.get("use_case", ""),
+            "skill_names": _get_skill_names(agent_id),
+            "changed_fields": changed_fields,
+            "created_at": pre_update_item.get("created_at", ""),
+            "snapshot_at": now,
+        }
+
+        history_table.put_item(Item=snapshot)
+        logger.info("Saved config history", extra={"agent_id": agent_id, "version": next_version})
+    except Exception:
+        logger.warning("Failed to save config history", extra={"agent_id": agent_id})
+
+
 def update_agent(event: dict) -> dict:
     """Update an existing agent with the provided fields."""
     agent_id = event.get("pathParameters", {}).get("agentId", "")
@@ -184,8 +259,17 @@ def update_agent(event: dict) -> dict:
     if "Item" not in resp:
         raise NotFoundError("Agent not found")
 
+    pre_update_item = resp["Item"]
+
     if "personality_id" in data and not _personality_exists(data["personality_id"]):
         raise BadRequestError("Referenced personality_id does not exist")
+
+    # Determine which fields are changing
+    changed_fields = [k for k in data if k != "agent_id" and data[k] != pre_update_item.get(k)]
+
+    # Save pre-update snapshot to history (fire-and-forget)
+    if changed_fields:
+        _save_config_history(agent_id, pre_update_item, changed_fields)
 
     # Build dynamic update expression
     parts, names, values = [], {}, {}
@@ -241,6 +325,58 @@ def delete_agent(event: dict) -> dict:
     return createResponse(200, "Agent deleted successfully")
 
 
+def get_agent_history(event: dict) -> dict:
+    """List version history for an agent, newest first."""
+    agent_id = event.get("pathParameters", {}).get("agentId", "")
+    if not agent_id:
+        raise BadRequestError("Agent ID is required")
+    if not history_table:
+        return createResponse(200, "History not available", {"versions": [], "count": 0})
+
+    params = event.get("queryStringParameters") or {}
+    limit = min(50, int(params.get("limit", 20)))
+
+    query_kwargs = {
+        "KeyConditionExpression": Key("agent_id").eq(agent_id),
+        "ScanIndexForward": False,
+        "Limit": limit,
+    }
+    last_key = params.get("lastKey")
+    if last_key:
+        query_kwargs["ExclusiveStartKey"] = {"agent_id": agent_id, "version": int(last_key)}
+
+    resp = history_table.query(**query_kwargs)
+    items = resp.get("Items", [])
+
+    result = {"versions": items, "count": len(items)}
+    if "LastEvaluatedKey" in resp:
+        result["lastKey"] = str(int(resp["LastEvaluatedKey"]["version"]))
+
+    return createResponse(200, "Agent history retrieved", result)
+
+
+def get_agent_version(event: dict) -> dict:
+    """Get a specific version of an agent's config history."""
+    agent_id = event.get("pathParameters", {}).get("agentId", "")
+    version_str = event.get("pathParameters", {}).get("version", "")
+    if not agent_id or not version_str:
+        raise BadRequestError("Agent ID and version are required")
+    if not history_table:
+        raise NotFoundError("History not available")
+
+    try:
+        version = int(version_str)
+    except ValueError:
+        raise BadRequestError("Version must be a number")
+
+    resp = history_table.get_item(Key={"agent_id": agent_id, "version": version})
+    item = resp.get("Item")
+    if not item:
+        raise NotFoundError(f"Version {version} not found for agent {agent_id}")
+
+    return createResponse(200, "Agent version retrieved", item)
+
+
 @tracer.capture_lambda_handler
 def lambda_handler(event, context):
     """Main Lambda entry point — routes based on httpMethod and resource."""
@@ -258,6 +394,10 @@ def lambda_handler(event, context):
             return update_agent(event)
         elif resource == "/agents/{agentId}" and http_method == "DELETE":
             return delete_agent(event)
+        elif resource == "/agents/{agentId}/history" and http_method == "GET":
+            return get_agent_history(event)
+        elif resource == "/agents/{agentId}/history/{version}" and http_method == "GET":
+            return get_agent_version(event)
         else:
             raise BadRequestError(
                 f"Unsupported route: {http_method} {resource}"

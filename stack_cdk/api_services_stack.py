@@ -614,6 +614,27 @@ class ApiServicesStack(Stack):
             authorization_type=apigw.AuthorizationType.CUSTOM,
         )
 
+        # History routes under /agents/{agentId}/history
+        history_resource = self.agent_resource.add_resource("history")
+
+        # GET /agents/{agentId}/history - List config history
+        history_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.agents_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
+        version_resource = history_resource.add_resource("{version}")
+
+        # GET /agents/{agentId}/history/{version} - Get specific version
+        version_resource.add_method(
+            "GET",
+            apigw.LambdaIntegration(self.lambda_stack.agents_crud_fn),
+            authorizer=self.admin_authorizer,
+            authorization_type=apigw.AuthorizationType.CUSTOM,
+        )
+
     def _create_personality_routes(self) -> None:
         """Create Personality CRUD REST routes (top-level)."""
         personalities_resource = self.api.root.add_resource("personalities")
