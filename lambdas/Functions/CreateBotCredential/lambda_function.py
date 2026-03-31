@@ -21,6 +21,9 @@ from custom_exceptions import BadRequestError, ConflictError
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
+# Only Gmail accounts are supported for meeting bot
+ALLOWED_EMAIL_DOMAINS = ["gmail.com"]
+
 logger = Logger()
 tracer = Tracer()
 
@@ -48,6 +51,13 @@ def _validate_input(data: dict) -> None:
     email = data.get("email", "").strip()
     if not email or not EMAIL_REGEX.match(email):
         raise BadRequestError("Invalid email format")
+
+    # Validate email domain — only Gmail supported
+    domain = email.split("@")[-1].lower()
+    if domain not in ALLOWED_EMAIL_DOMAINS:
+        raise BadRequestError(
+            f"Email domain '{domain}' is not supported. Only Gmail accounts (gmail.com) are allowed."
+        )
 
     # Validate password not empty
     password = data.get("password", "")
