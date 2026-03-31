@@ -6,6 +6,7 @@ Updates credential status to 'verified' or 'invalid' based on SMTP login result.
 """
 
 import dns.resolver
+import ipaddress
 import json
 import os
 import smtplib
@@ -27,6 +28,9 @@ secrets_client = boto3.client("secretsmanager")
 table_name = os.environ.get("BOT_CREDENTIALS_TABLE")
 table = dynamodb.Table(table_name)
 ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+
+# Only allow Gmail domains for bot credentials
+ALLOWED_EMAIL_DOMAINS = {"gmail.com", "googlemail.com"}
 
 # Known SMTP servers by email domain
 KNOWN_SMTP_SERVERS = {
@@ -71,12 +75,16 @@ def _get_smtp_server(email: str) -> dict | None:
     """Get SMTP server config based on email domain."""
     domain = email.split("@")[-1].lower()
     
+    # Only allow whitelisted domains — prevents SSRF via DNS/MX lookup
+    if domain not in ALLOWED_EMAIL_DOMAINS:
+        logger.warning(f"Blocked non-whitelisted email domain: {domain}")
+        return None
+    
     # Check known domains first
     if domain in KNOWN_SMTP_SERVERS:
         return KNOWN_SMTP_SERVERS[domain]
     
-    # Try to detect from MX records (for custom domains)
-    return _detect_smtp_from_mx(domain)
+    return None
 
 
 def _get_password(credential_id: str) -> str:

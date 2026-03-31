@@ -12,11 +12,13 @@ Supports two modes:
 Validates that project has a verified and active bot credential before starting bot.
 """
 
+import ipaddress
 import json
 import os
 import re
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from aws_lambda_powertools import Logger, Tracer
 import boto3
@@ -90,6 +92,29 @@ def _validate_input(data: dict) -> None:
         error = validate_meeting_link(meeting_link)
         if error:
             raise BadRequestError(error)
+
+
+def _validate_meeting_link(url: str) -> None:
+    """Validate meeting link to prevent SSRF attacks."""
+    parsed = urlparse(url)
+
+    if parsed.scheme != "https":
+        raise BadRequestError("Meeting link must use HTTPS")
+
+    hostname = parsed.hostname
+    if not hostname:
+        raise BadRequestError("Invalid meeting link")
+
+    # Block IP addresses (prevents access to metadata service, internal networks)
+    try:
+        ipaddress.ip_address(hostname)
+        raise BadRequestError("Meeting link must use a domain name, not an IP address")
+    except ValueError:
+        pass  # Not an IP — good
+
+    # Only allow Google Meet
+    if hostname != "meet.google.com":
+        raise BadRequestError("Only Google Meet links (meet.google.com) are supported")
 
 
 def _verify_project_exists(project_id: str) -> dict:
@@ -357,6 +382,9 @@ def lambda_handler(event, context):
         now = datetime.now(timezone.utc).isoformat()
 
         meeting_link = data.get("meeting_link")
+
+        if meeting_link:
+            _validate_meeting_link(meeting_link)
 
         item = {
             "session_id": session_id,

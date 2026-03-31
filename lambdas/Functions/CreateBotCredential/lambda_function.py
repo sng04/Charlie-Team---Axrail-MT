@@ -22,6 +22,9 @@ from url_validation import validate_email_domain
 
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
+# Only Gmail accounts are supported for meeting bot
+ALLOWED_EMAIL_DOMAINS = ["gmail.com", "axrail.com"]
+
 logger = Logger()
 tracer = Tracer()
 
@@ -54,6 +57,13 @@ def _validate_input(data: dict) -> None:
     domain_error = validate_email_domain(email)
     if domain_error:
         raise BadRequestError(domain_error)
+
+    # Validate email domain — only Gmail supported
+    domain = email.split("@")[-1].lower()
+    if domain not in ALLOWED_EMAIL_DOMAINS:
+        raise BadRequestError(
+            f"Email domain '{domain}' is not supported. Only Gmail accounts (gmail.com) are allowed."
+        )
 
     # Validate password not empty
     password = data.get("password", "")
