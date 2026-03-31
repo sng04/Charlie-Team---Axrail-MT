@@ -321,7 +321,7 @@ class SentenceMerger:
     """
 
     # Max seconds of silence between fragments before flushing
-    MERGE_GAP_THRESHOLD = float(os.environ.get("MERGE_GAP_THRESHOLD", "1.5"))
+    MERGE_GAP_THRESHOLD = float(os.environ.get("MERGE_GAP_THRESHOLD", "1.0"))
     # Min word count to consider a fragment "complete enough" on its own
     MIN_STANDALONE_WORDS = int(os.environ.get("MERGE_MIN_STANDALONE_WORDS", "4"))
 
