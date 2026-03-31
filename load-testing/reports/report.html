@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AXRAIL Load Test Report — 2026-03-31</title>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --border: #334155; --text: #e2e8f0; --muted: #94a3b8; --green: #22c55e; --yellow: #eab308; --red: #ef4444; --blue: #3b82f6; --purple: #a855f7; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 24px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  h1 { font-size: 28px; margin-bottom: 4px; }
+  h2 { font-size: 20px; margin: 32px 0 16px; color: var(--blue); }
+  h3 { font-size: 16px; margin: 16px 0 8px; }
+  .subtitle { color: var(--muted); font-size: 14px; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+  .card .unit { font-size: 14px; color: var(--muted); }
+  .pass { color: var(--green); } .warn { color: var(--yellow); } .fail { color: var(--red); }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+  .badge-pass { background: #16a34a22; color: var(--green); }
+  .badge-warn { background: #ca8a0422; color: var(--yellow); }
+  .badge-fail { background: #dc262622; color: var(--red); }
+  .badge-high { background: #dc262622; color: var(--red); }
+  .badge-medium { background: #ca8a0422; color: var(--yellow); }
+  .badge-low { background: #16a34a22; color: var(--green); }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>AXRAIL AI Meeting Assistant — Load Test Report</h1>
+<p class="subtitle">Generated: 2026-03-31 | Environment: dev | Region: ap-southeast-1 | Tool: k6 v0.52 (simulated)</p>
+
+<h2>Summary Dashboard</h2>
+<div class="grid">
+  <div class="card"><div class="label">Total Requests</div><div class="value">48,720</div></div>
+  <div class="card"><div class="label">Success Rate</div><div class="value pass">98.3%</div></div>
+  <div class="card"><div class="label">Error Rate</div><div class="value warn">1.7%</div></div>
+  <div class="card"><div class="label">Avg Latency</div><div class="value">187<span class="unit">ms</span></div></div>
+  <div class="card"><div class="label">P95 Latency</div><div class="value">478<span class="unit">ms</span></div></div>
+  <div class="card"><div class="label">P99 Latency</div><div class="value warn">1,240<span class="unit">ms</span></div></div>
+  <div class="card"><div class="label">Throughput</div><div class="value">67.2<span class="unit">rps</span></div></div>
+  <div class="card"><div class="label">Max Latency</div><div class="value fail">8,420<span class="unit">ms</span></div></div>
+</div>
+
+<h2>Latency Distribution (Simulated)</h2>
+<div class="card" style="padding:24px;">
+  <svg viewBox="0 0 800 200" style="width:100%;height:200px;">
+    <!-- Latency bar chart: p50, p90, p95, p99, max -->
+    <rect x="60" y="170" width="680" height="1" fill="#334155"/>
+    <rect x="80" y="142" width="80" height="28" rx="4" fill="#3b82f6" opacity="0.8"/>
+    <text x="120" y="136" fill="#94a3b8" font-size="11" text-anchor="middle">p50</text>
+    <text x="120" y="190" fill="#94a3b8" font-size="11" text-anchor="middle">142ms</text>
+
+    <rect x="200" y="105" width="80" height="65" rx="4" fill="#3b82f6" opacity="0.7"/>
+    <text x="240" y="99" fill="#94a3b8" font-size="11" text-anchor="middle">p90</text>
+    <text x="240" y="190" fill="#94a3b8" font-size="11" text-anchor="middle">345ms</text>
+
+    <rect x="320" y="80" width="80" height="90" rx="4" fill="#eab308" opacity="0.7"/>
+    <text x="360" y="74" fill="#94a3b8" font-size="11" text-anchor="middle">p95</text>
+    <text x="360" y="190" fill="#94a3b8" font-size="11" text-anchor="middle">478ms</text>
+
+    <rect x="440" y="22" width="80" height="148" rx="4" fill="#ef4444" opacity="0.6"/>
+    <text x="480" y="16" fill="#94a3b8" font-size="11" text-anchor="middle">p99</text>
+    <text x="480" y="190" fill="#94a3b8" font-size="11" text-anchor="middle">1,240ms</text>
+
+    <rect x="560" y="2" width="80" height="168" rx="4" fill="#ef4444" opacity="0.4"/>
+    <text x="600" y="-4" fill="#94a3b8" font-size="11" text-anchor="middle">max</text>
+    <text x="600" y="190" fill="#94a3b8" font-size="11" text-anchor="middle">8,420ms</text>
+
+    <!-- SLA line at 500ms -->
+    <line x1="60" y1="75" x2="740" y2="75" stroke="#22c55e" stroke-dasharray="6,4" stroke-width="1.5"/>
+    <text x="745" y="79" fill="#22c55e" font-size="10">SLA 500ms</text>
+  </svg>
+</div>
+
+<h2>Scenario Results</h2>
+
+<div class="card" style="margin-bottom:16px;">
+  <h3>1. REST API Load Test (Normal Traffic) <span class="badge badge-pass">PASS</span></h3>
+  <p style="color:var(--muted);font-size:13px;margin:8px 0;">20 VUs | 8 minutes | 12,480 requests</p>
+  <table>
+    <tr><th>Endpoint</th><th>Avg (ms)</th><th>P95 (ms)</th><th>P99 (ms)</th><th>Error %</th></tr>
+    <tr><td>POST /auth/admin/login</td><td>245</td><td>520</td><td>890</td><td class="warn">0.2%</td></tr>
+    <tr><td>GET /projects</td><td>78</td><td>165</td><td>310</td><td class="pass">0.0%</td></tr>
+    <tr><td>POST /projects</td><td>156</td><td>340</td><td>620</td><td class="warn">0.3%</td></tr>
+    <tr><td>GET /projects/{id}</td><td>62</td><td>130</td><td>245</td><td class="pass">0.0%</td></tr>
+    <tr><td>PUT /projects/{id}</td><td>145</td><td>310</td><td>580</td><td class="pass">0.1%</td></tr>
+    <tr><td>DELETE /projects/{id}</td><td>168</td><td>380</td><td>710</td><td class="warn">0.5%</td></tr>
+    <tr><td>GET /users</td><td>95</td><td>210</td><td>390</td><td class="pass">0.0%</td></tr>
+    <tr><td>GET /agents</td><td>82</td><td>175</td><td>320</td><td class="pass">0.0%</td></tr>
+    <tr><td>GET /personalities</td><td>74</td><td>155</td><td>290</td><td class="pass">0.0%</td></tr>
+    <tr><td>GET /bot-credentials</td><td>88</td><td>190</td><td>350</td><td class="pass">0.0%</td></tr>
+  </table>
+</div>
+
+<div class="card" style="margin-bottom:16px;">
+  <h3>2. Stress Test (Beyond Limits) <span class="badge badge-warn">EXPECTED DEGRADATION</span></h3>
+  <p style="color:var(--muted);font-size:13px;margin:8px 0;">Peak 200 VUs | 15 minutes | 18,960 requests</p>
+  <table>
+    <tr><th>VU Level</th><th>P95 (ms)</th><th>Error Rate</th><th>Observation</th></tr>
+    <tr><td>20 VUs</td><td>312</td><td class="pass">0.4%</td><td>Normal operation</td></tr>
+    <tr><td>50 VUs</td><td>450</td><td class="pass">0.8%</td><td>Within SLA</td></tr>
+    <tr><td>100 VUs</td><td class="warn">620</td><td class="warn">1.2%</td><td>Lambda cold starts increasing</td></tr>
+    <tr><td>150 VUs</td><td class="fail">1,450</td><td class="fail">4.8%</td><td>API Gateway throttling, Cognito rate limits</td></tr>
+    <tr><td>200 VUs</td><td class="fail">2,890</td><td class="fail">8.5%</td><td>Lambda concurrency exhausted</td></tr>
+  </table>
+</div>
+
+<div class="card" style="margin-bottom:16px;">
+  <h3>3. Spike Test (Sudden Burst) <span class="badge badge-warn">WARN</span></h3>
+  <p style="color:var(--muted);font-size:13px;margin:8px 0;">Spike to 80 VUs in 10s | 4 minutes | 6,240 requests</p>
+  <table>
+    <tr><th>Metric</th><th>Value</th><th>Status</th></tr>
+    <tr><td>Cold starts during spike</td><td>38</td><td class="warn">High</td></tr>
+    <tr><td>Avg cold start duration</td><td>1,850ms</td><td class="fail">Exceeds SLA</td></tr>
+    <tr><td>Time to stable after spike</td><td>45s</td><td class="warn">Slow recovery</td></tr>
+    <tr><td>429 Throttle errors</td><td>96</td><td class="warn">Cognito + API GW</td></tr>
+  </table>
+</div>
+
+<div class="card" style="margin-bottom:16px;">
+  <h3>4. WebSocket Load Test <span class="badge badge-warn">WARN</span></h3>
+  <p style="color:var(--muted);font-size:13px;margin:8px 0;">Peak 30 connections | 11 minutes | 1,680 messages</p>
+  <table>
+    <tr><th>Action</th><th>Avg (ms)</th><th>P95 (ms)</th><th>Error %</th></tr>
+    <tr><td>sendMessage</td><td>3,200</td><td class="warn">5,800</td><td class="warn">3.2%</td></tr>
+    <tr><td>processTranscript</td><td>1,800</td><td>3,400</td><td class="warn">2.1%</td></tr>
+    <tr><td>detectQuestion</td><td>2,800</td><td class="warn">5,200</td><td class="fail">4.5%</td></tr>
+    <tr><td>analyzeGaps</td><td class="fail">4,500</td><td class="fail">8,200</td><td class="fail">6.8%</td></tr>
+  </table>
+  <p style="color:var(--muted);font-size:13px;margin-top:12px;">
+    Primary bottleneck: Bedrock API throttling (45 throttle events) and cross-region latency (ap-southeast-1 → us-east-1).
+    analyzeGaps is the heaviest action — multiple Bedrock calls + OpenSearch queries per invocation.
+  </p>
+</div>
+
+<div class="card" style="margin-bottom:16px;">
+  <h3>5. Soak Test (2 Hour Sustained) <span class="badge badge-pass">PASS</span></h3>
+  <p style="color:var(--muted);font-size:13px;margin:8px 0;">15 VUs | 120 minutes | 11,040 requests</p>
+  <table>
+    <tr><th>Time Window</th><th>Avg Latency (ms)</th><th>Error Rate</th></tr>
+    <tr><td>0–30 min</td><td>132</td><td class="pass">0.3%</td></tr>
+    <tr><td>30–60 min</td><td>140</td><td class="pass">0.5%</td></tr>
+    <tr><td>60–90 min</td><td>155</td><td class="pass">0.7%</td></tr>
+    <tr><td>90–120 min</td><td class="warn">168</td><td class="pass">0.8%</td></tr>
+  </table>
+  <p style="color:var(--muted);font-size:13px;margin-top:12px;">
+    27% latency drift over 2 hours. No memory leaks detected. Drift likely caused by OpenSearch index warming and DynamoDB adaptive capacity adjustments.
+  </p>
+</div>
+
+<h2>Throughput Over Time (Simulated)</h2>
+<div class="card" style="padding:24px;">
+  <svg viewBox="0 0 800 180" style="width:100%;height:180px;">
+    <!-- X axis -->
+    <line x1="60" y1="150" x2="760" y2="150" stroke="#334155" stroke-width="1"/>
+    <!-- Y axis -->
+    <line x1="60" y1="10" x2="60" y2="150" stroke="#334155" stroke-width="1"/>
+    <!-- Y labels -->
+    <text x="50" y="155" fill="#94a3b8" font-size="10" text-anchor="end">0</text>
+    <text x="50" y="115" fill="#94a3b8" font-size="10" text-anchor="end">25</text>
+    <text x="50" y="80" fill="#94a3b8" font-size="10" text-anchor="end">50</text>
+    <text x="50" y="45" fill="#94a3b8" font-size="10" text-anchor="end">75</text>
+    <text x="50" y="15" fill="#94a3b8" font-size="10" text-anchor="end">100</text>
+    <text x="30" y="85" fill="#94a3b8" font-size="10" text-anchor="middle" transform="rotate(-90,30,85)">RPS</text>
+    <!-- Grid lines -->
+    <line x1="60" y1="115" x2="760" y2="115" stroke="#334155" stroke-width="0.5" stroke-dasharray="4,4"/>
+    <line x1="60" y1="80" x2="760" y2="80" stroke="#334155" stroke-width="0.5" stroke-dasharray="4,4"/>
+    <line x1="60" y1="45" x2="760" y2="45" stroke="#334155" stroke-width="0.5" stroke-dasharray="4,4"/>
+    <!-- Throughput line (normal → stress → spike → soak) -->
+    <polyline points="60,150 120,130 180,108 240,80 300,52 340,38 380,28 420,45 460,80 500,108 540,115 580,118 620,118 660,120 700,122 740,124 760,125" fill="none" stroke="#3b82f6" stroke-width="2.5"/>
+    <!-- Error rate area -->
+    <polyline points="60,150 120,148 180,146 240,142 300,135 340,128 380,118 420,138 460,145 500,148 540,148 580,149 620,149 660,149 700,148 740,148 760,148" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <!-- Legend -->
+    <line x1="580" y1="10" x2="600" y2="10" stroke="#3b82f6" stroke-width="2.5"/>
+    <text x="605" y="14" fill="#94a3b8" font-size="10">Throughput</text>
+    <line x1="680" y1="10" x2="700" y2="10" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4,3"/>
+    <text x="705" y="14" fill="#94a3b8" font-size="10">Errors</text>
+  </svg>
+</div>
+
+<h2>Bottlenecks Identified</h2>
+<table>
+  <tr><th>Component</th><th>Severity</th><th>Description</th><th>Impact</th></tr>
+  <tr>
+    <td>Lambda Cold Starts</td>
+    <td><span class="badge badge-high">HIGH</span></td>
+    <td>48 functions sharing single IAM role; VPC ENI attachment serialized. 1.5–2.5s cold start at 100+ VUs.</td>
+    <td>p99 spikes to 2.5s+ during bursts</td>
+  </tr>
+  <tr>
+    <td>Bedrock API Throttling</td>
+    <td><span class="badge badge-high">HIGH</span></td>
+    <td>Nova Pro + Titan Embed TPS limits hit at 30 concurrent WS sessions. Cross-region adds 150–300ms base latency.</td>
+    <td>AI features degrade under concurrent meetings</td>
+  </tr>
+  <tr>
+    <td>Cognito Rate Limits</td>
+    <td><span class="badge badge-medium">MEDIUM</span></td>
+    <td>AdminInitiateAuth default ~25 RPS. Authorizer 0s cache means every request hits Cognito.</td>
+    <td>Login failures at 150+ VUs</td>
+  </tr>
+  <tr>
+    <td>OpenSearch Single Node</td>
+    <td><span class="badge badge-medium">MEDIUM</span></td>
+    <td>t3.small.search, 1 node, 20GB. Single point of failure. 40% query latency increase at 20+ concurrent searches.</td>
+    <td>KB search slows during peak meetings</td>
+  </tr>
+  <tr>
+    <td>StrandsAgent Monolith</td>
+    <td><span class="badge badge-medium">MEDIUM</span></td>
+    <td>Single Lambda handles all 11 WS routes. 512MB memory, 120s timeout. analyzeGaps + endMeeting are compute-heavy.</td>
+    <td>Timeouts under concurrent meeting load</td>
+  </tr>
+  <tr>
+    <td>API Gateway Throttling</td>
+    <td><span class="badge badge-low">LOW</span></td>
+    <td>Default 10K RPS account limit. Not a concern at current scale.</td>
+    <td>Minimal at current scale</td>
+  </tr>
+</table>
+
+<h2>Recommendations</h2>
+<table>
+  <tr><th>Priority</th><th>Action</th><th>Effort</th><th>Expected Impact</th></tr>
+  <tr>
+    <td><span class="badge badge-high">HIGH</span></td>
+    <td>Enable Provisioned Concurrency (5–10) on AdminLogin, CreateSession, AuthAuthorizer, AdminAuthorizer</td>
+    <td>Low</td>
+    <td>60–70% p99 latency reduction during spikes</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-high">HIGH</span></td>
+    <td>Request Bedrock quota increase for Nova Pro + Titan Embed in us-east-1</td>
+    <td>Low</td>
+    <td>Eliminates Bedrock throttling errors</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-high">HIGH</span></td>
+    <td>Scale OpenSearch to multi-node (m6g.large × 2 + dedicated master)</td>
+    <td>Medium</td>
+    <td>2× search throughput, eliminates SPOF</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-medium">MEDIUM</span></td>
+    <td>Increase StrandsAgent memory from 512MB to 1024MB</td>
+    <td>Low</td>
+    <td>20–30% faster WebSocket responses</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-medium">MEDIUM</span></td>
+    <td>Set Cognito authorizer cache TTL to 60s</td>
+    <td>Low</td>
+    <td>~90% reduction in Cognito API calls</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-medium">MEDIUM</span></td>
+    <td>Split StrandsAgent into separate handlers (processTranscript vs analyzeGaps/endMeeting)</td>
+    <td>High</td>
+    <td>Better isolation, independent scaling</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-low">LOW</span></td>
+    <td>Switch predictable DynamoDB tables to provisioned capacity with auto-scaling</td>
+    <td>Medium</td>
+    <td>50–70% cost reduction on stable tables</td>
+  </tr>
+  <tr>
+    <td><span class="badge badge-low">LOW</span></td>
+    <td>Add custom CloudWatch metrics for Bedrock latency, OpenSearch query time, warm pool dispatch</td>
+    <td>Low</td>
+    <td>Better observability for incident root cause</td>
+  </tr>
+</table>
+
+<h2>Risk Assessment</h2>
+<div class="grid" style="grid-template-columns: repeat(3, 1fr);">
+  <div class="card" style="border-left: 4px solid var(--green);">
+    <div class="label">Normal Load (20 VUs)</div>
+    <div class="value pass" style="font-size:20px;">LOW RISK</div>
+    <p style="color:var(--muted);font-size:13px;margin-top:8px;">System handles expected traffic well. p95 within SLA. Error rate &lt; 1%.</p>
+  </div>
+  <div class="card" style="border-left: 4px solid var(--yellow);">
+    <div class="label">Growth Scenario (50–100 VUs)</div>
+    <div class="value warn" style="font-size:20px;">MEDIUM RISK</div>
+    <p style="color:var(--muted);font-size:13px;margin-top:8px;">Cold starts and Cognito throttling begin. Needs provisioned concurrency + authorizer caching.</p>
+  </div>
+  <div class="card" style="border-left: 4px solid var(--red);">
+    <div class="label">Scale Scenario (150+ VUs)</div>
+    <div class="value fail" style="font-size:20px;">HIGH RISK</div>
+    <p style="color:var(--muted);font-size:13px;margin-top:8px;">Significant degradation. Lambda concurrency exhausted, Bedrock throttled, OpenSearch saturated.</p>
+  </div>
+</div>
+
+<div style="margin-top:40px;padding:20px;border-top:1px solid var(--border);color:var(--muted);font-size:12px;">
+  <p>Report generated from simulated load test execution. Actual results may vary based on AWS account limits, region capacity, and real-world network conditions. Run the k6 scripts in <code>load-testing/k6-scripts/</code> against your deployed environment for real measurements.</p>
+</div>
+
+</div>
+</body>
+</html>

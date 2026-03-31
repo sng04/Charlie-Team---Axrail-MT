@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "name": "Domain Verification Check",
+  "description": "Runs the domain verification validator after any changes to CDK stack files or deployment scripts to ensure the .well-known verification file configuration is not broken.",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "stack_cdk/security_verification_stack.py",
+      "stack_cdk/environment.py",
+      "app.py"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "The security verification stack or deployment config was modified. Check that: 1) SecurityVerificationStack is still instantiated in app.py with valid frontend_bucket_name and cloudfront_distribution_id, 2) The BucketDeployment in security_verification_stack.py still has prune=False and content_type='application/json', 3) The .well-known CloudFront behavior custom resource is still present. Report any issues found."
+  }
+}

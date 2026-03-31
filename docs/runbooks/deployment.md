@@ -20,7 +20,7 @@ AWS_SHARED_CREDENTIALS_FILE=.aws/credentials \
   -a ".venv/bin/python3 app.py"
 ```
 
-This deploys 6 stacks in dependency order:
+This deploys 7 stacks in dependency order:
 
 1. `AXRAIL-DynamoDB-dev` — 12 DynamoDB tables + OpenSearch domain
 2. `AXRAIL-Cognito-dev` — User Pool + groups
@@ -28,6 +28,7 @@ This deploys 6 stacks in dependency order:
 4. `AXRAIL-Lambda-dev` — 46 Lambdas + WebSocket API + S3 buckets + EventBridge
 5. `AXRAIL-ApiServices-dev` — REST API Gateway + routes
 6. `AXRAIL-BedrockAgent-dev` — Bedrock Agent in us-east-1
+7. `AXRAIL-SecurityVerification-dev` — Domain verification file + CloudFront behavior
 
 ## EventBridge Rule: Bot Credential Validation
 
@@ -61,11 +62,43 @@ Available environments: `dev`, `staging`, `prod`. See `stack_cdk/environment.py`
 ✅  AXRAIL-Lambda-dev
 ✅  AXRAIL-ApiServices-dev
 ✅  AXRAIL-BedrockAgent-dev
+✅  AXRAIL-SecurityVerification-dev
 
 Outputs:
 AXRAIL-ApiServices-dev.RestApiUrl = https://{id}.execute-api.ap-southeast-1.amazonaws.com/dev
 AXRAIL-Lambda-dev.WebSocketUrl = wss://{id}.execute-api.ap-southeast-1.amazonaws.com/production
+AXRAIL-SecurityVerification-dev.VerificationFileUrl = https://d2bed2yjnef4ve.cloudfront.net/.well-known/aws/securityagent-domain-verification.json
+AXRAIL-SecurityVerification-dev.VerificationStatus = PASS
 ```
+
+## Frontend Deployment — Protecting Verification Files
+
+The frontend is deployed separately to the S3 bucket `meetagentfrontend-sitebucket397a1860-faljsv4qc0to`. When syncing frontend assets, you **must** exclude the `.well-known/` prefix to prevent overwriting the domain verification file.
+
+### Safe S3 sync command
+
+```bash
+aws s3 sync ./dist s3://meetagentfrontend-sitebucket397a1860-faljsv4qc0to \
+  --delete \
+  --exclude ".well-known/*"
+```
+
+If your frontend CI/CD pipeline uses `aws s3 sync --delete` without `--exclude ".well-known/*"`, the verification file will be deleted on every deploy. Update the pipeline accordingly.
+
+### If using a frontend framework (React, Vite, Next.js)
+
+Place the verification file in the `public/` directory of the frontend project so it is included in every build output:
+
+```
+public/.well-known/aws/securityagent-domain-verification.json
+```
+
+Contents:
+```json
+{"tokens":["jP2oeFgO9BqJJGZmVvkSXA"]}
+```
+
+This provides a belt-and-suspenders approach: the CDK stack deploys the file, and the frontend build also includes it.
 
 ## Failure Scenarios
 

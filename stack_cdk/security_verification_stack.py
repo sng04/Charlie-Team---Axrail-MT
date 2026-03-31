@@ -1,13 +1,17 @@
 """Stack to deploy AWS Security Agent verification files and CloudFront behavior.
 
 Deploys verification files to the existing frontend S3 bucket and adds a
-dedicated CloudFront cache behavior for `.well-known/*` so the SPA fallback
+dedicated CloudFront cache behavior for ``.well-known/*`` so the SPA fallback
 (403/404 → index.html) never intercepts verification requests.
+
+A post-deploy custom resource validates that the file is reachable via
+CloudFront with the correct Content-Type and token payload.
 """
 
 import json
 
 from aws_cdk import (
+    CfnOutput,
     Stack,
     CustomResource,
     Duration,
@@ -29,11 +33,12 @@ VERIFICATION_PAYLOAD = json.dumps(
 CACHING_DISABLED_POLICY_ID = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"
 
 
-# Lambda code that adds/removes the .well-known/* behavior on the distribution
+# ---------------------------------------------------------------------------
+# Lambda: add / remove the .well-known/* CloudFront cache behavior
+# ---------------------------------------------------------------------------
 CF_BEHAVIOR_HANDLER = '''
 import json
 import boto3
-import copy
 
 cf = boto3.client("cloudfront")
 
@@ -77,7 +82,6 @@ def _ensure_behavior(dist_id, origin_id, path_pattern, cache_policy_id):
     behaviors = config.get("CacheBehaviors", {"Quantity": 0})
     items = behaviors.get("Items", [])
 
-    # Replace existing behavior with same path pattern, or append
     replaced = False
     for i, b in enumerate(items):
         if b["PathPattern"] == path_pattern:
@@ -88,10 +92,7 @@ def _ensure_behavior(dist_id, origin_id, path_pattern, cache_policy_id):
         items.append(behavior)
 
     config["CacheBehaviors"] = {"Quantity": len(items), "Items": items}
-
-    cf.update_distribution(
-        Id=dist_id, IfMatch=etag, DistributionConfig=config
-    )
+    cf.update_distribution(Id=dist_id, IfMatch=etag, DistributionConfig=config)
 
 
 def _remove_behavior(dist_id, path_pattern):
@@ -104,10 +105,90 @@ def _remove_behavior(dist_id, path_pattern):
     items = [b for b in items if b["PathPattern"] != path_pattern]
 
     config["CacheBehaviors"] = {"Quantity": len(items), "Items": items}
+    cf.update_distribution(Id=dist_id, IfMatch=etag, DistributionConfig=config)
+'''
 
-    cf.update_distribution(
-        Id=dist_id, IfMatch=etag, DistributionConfig=config
-    )
+# ---------------------------------------------------------------------------
+# Lambda: post-deploy validation — HEAD the verification URL and assert
+# HTTP 200, application/json Content-Type, and correct token payload.
+# ---------------------------------------------------------------------------
+VERIFICATION_VALIDATOR_HANDLER = '''
+import json
+import time
+import urllib.request
+import urllib.error
+
+def on_event(event, context):
+    if event["RequestType"] == "Delete":
+        return {"PhysicalResourceId": event.get("PhysicalResourceId", "validator")}
+
+    url = event["ResourceProperties"]["VerificationUrl"]
+    expected_token = event["ResourceProperties"]["ExpectedToken"]
+    max_retries = int(event["ResourceProperties"].get("MaxRetries", "5"))
+
+    result = _validate(url, expected_token, max_retries)
+    print(json.dumps(result))
+
+    if result["status"] != "PASS":
+        raise RuntimeError(
+            f"Domain verification FAILED: {result['reason']}"
+        )
+
+    return {
+        "PhysicalResourceId": "validator",
+        "Data": result,
+    }
+
+
+def _validate(url, expected_token, max_retries):
+    """Retry with back-off to allow CloudFront invalidation to propagate."""
+    last_error = None
+    for attempt in range(max_retries):
+        if attempt > 0:
+            time.sleep(min(2 ** attempt, 30))
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                status = resp.status
+                content_type = resp.headers.get("Content-Type", "")
+                body = resp.read().decode("utf-8")
+
+            if status != 200:
+                last_error = f"HTTP {status}"
+                continue
+
+            if "application/json" not in content_type:
+                last_error = f"Content-Type is '{content_type}', expected application/json"
+                continue
+
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                last_error = "Response body is not valid JSON"
+                continue
+
+            tokens = payload.get("tokens", [])
+            if expected_token not in tokens:
+                last_error = f"Token '{expected_token}' not found in response"
+                continue
+
+            return {
+                "status": "PASS",
+                "http_status": status,
+                "content_type": content_type,
+                "token_present": True,
+                "reason": "All checks passed",
+            }
+
+        except urllib.error.HTTPError as e:
+            last_error = f"HTTP {e.code}"
+        except Exception as e:
+            last_error = str(e)
+
+    return {
+        "status": "FAIL",
+        "reason": last_error or "Unknown error after retries",
+    }
 '''
 
 
@@ -138,7 +219,7 @@ class SecurityVerificationStack(Stack):
             domain_name="d2bed2yjnef4ve.cloudfront.net",
         )
 
-        # --- Deploy verification files to S3 ---
+        # --- Deploy verification files to S3 (with correct Content-Type) ---
 
         s3deploy.BucketDeployment(
             self,
@@ -148,11 +229,15 @@ class SecurityVerificationStack(Stack):
             ],
             destination_bucket=bucket,
             prune=False,
+            content_type="application/json",
+            cache_control=[
+                s3deploy.CacheControl.no_cache(),
+            ],
             distribution=distribution,
             distribution_paths=["/securityagent.json"],
         )
 
-        s3deploy.BucketDeployment(
+        well_known_deployment = s3deploy.BucketDeployment(
             self,
             "SecurityAgentWellKnownFile",
             sources=[
@@ -163,6 +248,10 @@ class SecurityVerificationStack(Stack):
             ],
             destination_bucket=bucket,
             prune=False,
+            content_type="application/json",
+            cache_control=[
+                s3deploy.CacheControl.no_cache(),
+            ],
             distribution=distribution,
             distribution_paths=[
                 "/.well-known/aws/securityagent-domain-verification.json",
@@ -201,7 +290,7 @@ class SecurityVerificationStack(Stack):
         # Look up the origin ID from the distribution
         origin_id = "MeetAgentFrontendDistributionOrigin169D33FD7"
 
-        CustomResource(
+        well_known_behavior = CustomResource(
             self,
             "WellKnownBehavior",
             service_token=provider.service_token,
@@ -211,4 +300,55 @@ class SecurityVerificationStack(Stack):
                 "PathPattern": ".well-known/*",
                 "CachePolicyId": CACHING_DISABLED_POLICY_ID,
             },
+        )
+
+        # --- Post-deploy validation custom resource ---
+        verification_url = (
+            f"https://d2bed2yjnef4ve.cloudfront.net"
+            f"/.well-known/aws/securityagent-domain-verification.json"
+        )
+
+        validator_fn = _lambda.Function(
+            self,
+            "VerificationValidatorFn",
+            runtime=_lambda.Runtime.PYTHON_3_11,
+            handler="index.on_event",
+            code=_lambda.Code.from_inline(VERIFICATION_VALIDATOR_HANDLER),
+            timeout=Duration.minutes(5),
+        )
+
+        validator_provider = cr.Provider(
+            self, "VerificationValidatorProvider", on_event_handler=validator_fn
+        )
+
+        validator = CustomResource(
+            self,
+            "VerificationValidator",
+            service_token=validator_provider.service_token,
+            properties={
+                "VerificationUrl": verification_url,
+                "ExpectedToken": "jP2oeFgO9BqJJGZmVvkSXA",
+                "MaxRetries": "5",
+                # Force re-validation on every deploy
+                "DeployTimestamp": str(self.node.addr),
+            },
+        )
+
+        # Validator must run after the file is deployed and behavior is set
+        validator.node.add_dependency(well_known_deployment)
+        validator.node.add_dependency(well_known_behavior)
+
+        # --- Outputs ---
+        CfnOutput(
+            self,
+            "VerificationFileUrl",
+            value=verification_url,
+            description="URL for AWS Security Agent domain verification",
+        )
+
+        CfnOutput(
+            self,
+            "VerificationStatus",
+            value=validator.get_att_string("status"),
+            description="Post-deploy verification result (PASS/FAIL)",
         )
