@@ -22,7 +22,7 @@ from custom_exceptions import BadRequestError, ConflictError
 EMAIL_REGEX = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
 # Only Gmail accounts are supported for meeting bot
-ALLOWED_EMAIL_DOMAINS = ["gmail.com"]
+ALLOWED_EMAIL_DOMAINS = ["gmail.com", "axrail.com"]
 
 logger = Logger()
 tracer = Tracer()
