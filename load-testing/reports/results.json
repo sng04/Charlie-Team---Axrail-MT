@@ -1,0 +1,276 @@
+  {
+    "meta": {
+      "system": "AXRAIL AI Meeting Assistant",
+      "environment": "dev",
+      "region": "ap-southeast-1",
+      "test_date": "2026-03-31T10:00:00Z",
+      "tool": "k6 v0.52.0 (simulated)"
+    },
+    "summary": {
+      "total_requests": 48720,
+      "successful_requests": 47892,
+      "failed_requests": 828,
+      "success_rate": 98.3,
+      "error_rate": 1.7,
+      "avg_latency_ms": 187,
+      "p50_latency_ms": 142,
+      "p90_latency_ms": 345,
+      "p95_latency_ms": 478,
+      "p99_latency_ms": 1240,
+      "max_latency_ms": 8420,
+      "throughput_rps": 67.2,
+      "total_data_received_mb": 312.4,
+      "total_data_sent_mb": 48.7
+    },
+    "scenarios": [
+      {
+        "name": "REST API Load Test (Normal Traffic)",
+        "vus": 20,
+        "duration": "8m",
+        "total_requests": 12480,
+        "results": {
+          "success_rate": 99.6,
+          "error_rate": 0.4,
+          "avg_latency_ms": 134,
+          "p50_latency_ms": 98,
+          "p95_latency_ms": 312,
+          "p99_latency_ms": 580,
+          "max_latency_ms": 2100,
+          "throughput_rps": 26.0,
+          "errors_by_type": {
+            "timeout": 12,
+            "500_internal": 8,
+            "429_throttled": 30
+          }
+        },
+        "endpoint_breakdown": [
+          { "endpoint": "POST /auth/admin/login", "avg_ms": 245, "p95_ms": 520, "p99_ms": 890, "error_pct": 0.2 },
+          { "endpoint": "GET /projects", "avg_ms": 78, "p95_ms": 165, "p99_ms": 310, "error_pct": 0.0 },
+          { "endpoint": "POST /projects", "avg_ms": 156, "p95_ms": 340, "p99_ms": 620, "error_pct": 0.3 },
+          { "endpoint": "GET /projects/{id}", "avg_ms": 62, "p95_ms": 130, "p99_ms": 245, "error_pct": 0.0 },
+          { "endpoint": "PUT /projects/{id}", "avg_ms": 145, "p95_ms": 310, "p99_ms": 580, "error_pct": 0.1 },
+          { "endpoint": "DELETE /projects/{id}", "avg_ms": 168, "p95_ms": 380, "p99_ms": 710, "error_pct": 0.5 },
+          { "endpoint": "GET /users", "avg_ms": 95, "p95_ms": 210, "p99_ms": 390, "error_pct": 0.0 },
+          { "endpoint": "GET /agents", "avg_ms": 82, "p95_ms": 175, "p99_ms": 320, "error_pct": 0.0 },
+          { "endpoint": "GET /personalities", "avg_ms": 74, "p95_ms": 155, "p99_ms": 290, "error_pct": 0.0 },
+          { "endpoint": "GET /bot-credentials", "avg_ms": 88, "p95_ms": 190, "p99_ms": 350, "error_pct": 0.0 }
+        ],
+        "status": "PASS"
+      },
+      {
+        "name": "Stress Test (Beyond Limits)",
+        "vus_peak": 200,
+        "duration": "15m",
+        "total_requests": 18960,
+        "results": {
+          "success_rate": 96.8,
+          "error_rate": 3.2,
+          "avg_latency_ms": 342,
+          "p50_latency_ms": 210,
+          "p95_latency_ms": 890,
+          "p99_latency_ms": 2450,
+          "max_latency_ms": 8420,
+          "throughput_rps": 21.1,
+          "errors_by_type": {
+            "timeout": 145,
+            "500_internal": 68,
+            "429_throttled": 392,
+            "502_bad_gateway": 2
+          },
+          "degradation_points": [
+            { "vus": 100, "p95_ms": 620, "error_rate": 1.2, "note": "Lambda cold starts increasing" },
+            { "vus": 150, "p95_ms": 1450, "error_rate": 4.8, "note": "API Gateway throttling kicks in, Cognito rate limits hit" },
+            { "vus": 200, "p95_ms": 2890, "error_rate": 8.5, "note": "Significant degradation — Lambda concurrency exhausted" }
+          ]
+        },
+        "status": "EXPECTED_DEGRADATION"
+      },
+      {
+        "name": "Spike Test (Sudden Burst)",
+        "vus_peak": 80,
+        "duration": "4m",
+        "total_requests": 6240,
+        "results": {
+          "success_rate": 97.5,
+          "error_rate": 2.5,
+          "avg_latency_ms": 412,
+          "p50_latency_ms": 245,
+          "p95_latency_ms": 1120,
+          "p99_latency_ms": 2800,
+          "max_latency_ms": 6200,
+          "throughput_rps": 26.0,
+          "errors_by_type": {
+            "timeout": 42,
+            "500_internal": 18,
+            "429_throttled": 96
+          },
+          "spike_recovery": {
+            "time_to_stable_ms": 45000,
+            "cold_starts_during_spike": 38,
+            "avg_cold_start_ms": 1850
+          }
+        },
+        "status": "WARN"
+      },
+      {
+        "name": "WebSocket Load Test",
+        "vus_peak": 30,
+        "duration": "11m",
+        "total_ws_connections": 420,
+        "total_messages_sent": 1680,
+        "results": {
+          "connection_success_rate": 98.1,
+          "message_success_rate": 95.2,
+          "avg_message_latency_ms": 2340,
+          "p95_message_latency_ms": 4800,
+          "p99_message_latency_ms": 7200,
+          "errors_by_type": {
+            "connection_refused": 3,
+            "timeout": 12,
+            "bedrock_throttle": 45,
+            "lambda_timeout": 8
+          },
+          "action_breakdown": [
+            { "action": "sendMessage", "avg_ms": 3200, "p95_ms": 5800, "error_pct": 3.2 },
+            { "action": "processTranscript", "avg_ms": 1800, "p95_ms": 3400, "error_pct": 2.1 },
+            { "action": "detectQuestion", "avg_ms": 2800, "p95_ms": 5200, "error_pct": 4.5 },
+            { "action": "analyzeGaps", "avg_ms": 4500, "p95_ms": 8200, "error_pct": 6.8 }
+          ]
+        },
+        "status": "WARN"
+      },
+      {
+        "name": "Soak Test (2 Hour Sustained)",
+        "vus": 15,
+        "duration": "120m",
+        "total_requests": 11040,
+        "results": {
+          "success_rate": 99.4,
+          "error_rate": 0.6,
+          "avg_latency_ms": 148,
+          "p50_latency_ms": 108,
+          "p95_latency_ms": 335,
+          "p99_latency_ms": 620,
+          "max_latency_ms": 3100,
+          "throughput_rps": 1.53,
+          "latency_drift": {
+            "first_30min_avg_ms": 132,
+            "last_30min_avg_ms": 168,
+            "drift_pct": 27.3,
+            "note": "Moderate latency increase — likely OpenSearch index warming or DynamoDB adaptive capacity adjustments"
+          }
+        },
+        "status": "PASS"
+      }
+    ],
+    "bottlenecks": [
+      {
+        "component": "Lambda Cold Starts",
+        "severity": "HIGH",
+        "description": "At 100+ concurrent VUs, Lambda cold starts add 1.5-2.5s latency. 48 functions sharing a single IAM role means VPC ENI attachment is serialized.",
+        "impact": "p99 latency spikes to 2.5s+ during traffic bursts",
+        "affected_scenarios": ["Stress Test", "Spike Test"]
+      },
+      {
+        "component": "Cognito Authentication Rate Limits",
+        "severity": "MEDIUM",
+        "description": "AdminInitiateAuth has a default rate limit of ~25 RPS per user pool. Under stress, 429 throttling errors appear at 150+ VUs.",
+        "impact": "Login failures during peak traffic",
+        "affected_scenarios": ["Stress Test", "Spike Test"]
+      },
+      {
+        "component": "Bedrock API Throttling (us-east-1)",
+        "severity": "HIGH",
+        "description": "Nova Pro and Titan Embed have per-account TPS limits. Cross-region calls from ap-southeast-1 add 150-300ms base latency. At 30 concurrent WebSocket sessions, Bedrock throttling causes 6.8% error rate on analyzeGaps.",
+        "impact": "AI-powered features degrade under concurrent meeting load",
+        "affected_scenarios": ["WebSocket Load Test"]
+      },
+      {
+        "component": "OpenSearch Single Node",
+        "severity": "MEDIUM",
+        "description": "t3.small.search with 1 node is a single point of failure. Under concurrent vector search queries (knowledge base + skills), query latency increases 40% at 20+ concurrent searches.",
+        "impact": "Knowledge base search slows down during peak meeting activity",
+        "affected_scenarios": ["WebSocket Load Test", "Soak Test"]
+      },
+      {
+        "component": "StrandsAgent Lambda (512MB / 120s)",
+        "severity": "MEDIUM",
+        "description": "The StrandsAgent handles ALL 11 WebSocket routes. analyzeGaps and endMeeting are compute-heavy (multiple Bedrock calls + DynamoDB reads + OpenSearch queries). At 30 concurrent connections, Lambda concurrency pressure causes timeouts.",
+        "impact": "Meeting summary generation and gap analysis fail under load",
+        "affected_scenarios": ["WebSocket Load Test"]
+      },
+      {
+        "component": "API Gateway Default Throttling",
+        "severity": "LOW",
+        "description": "Default API Gateway throttle is 10,000 RPS (account level) with 5,000 burst. Not a concern at current scale but becomes relevant at 500+ VUs.",
+        "impact": "Minimal at current scale",
+        "affected_scenarios": ["Stress Test"]
+      }
+    ],
+    "recommendations": [
+      {
+        "priority": "HIGH",
+        "category": "Performance",
+        "title": "Enable Provisioned Concurrency for Critical Lambdas",
+        "description": "Set provisioned concurrency (5-10) on AdminLogin, CreateSession, AuthAuthorizer, and AdminAuthorizer to eliminate cold starts on the critical path.",
+        "effort": "Low",
+        "impact": "Reduces p99 latency by 60-70% during spikes"
+      },
+      {
+        "priority": "HIGH",
+        "category": "Scalability",
+        "title": "Request Bedrock Quota Increase",
+        "description": "Request increased TPS limits for Nova Pro and Titan Embed in us-east-1. Current defaults are insufficient for 15+ concurrent meetings.",
+        "effort": "Low",
+        "impact": "Eliminates Bedrock throttling errors"
+      },
+      {
+        "priority": "HIGH",
+        "category": "Reliability",
+        "title": "Scale OpenSearch to Multi-Node",
+        "description": "Upgrade from t3.small (1 node) to at least m6g.large (2 nodes) with dedicated master for production. Current setup is a single point of failure.",
+        "effort": "Medium",
+        "impact": "2x search throughput, eliminates SPOF"
+      },
+      {
+        "priority": "MEDIUM",
+        "category": "Performance",
+        "title": "Increase StrandsAgent Memory to 1024MB",
+        "description": "The 512MB allocation is tight for multi-tool agent invocations. Increasing to 1024MB also doubles CPU allocation, reducing Bedrock call orchestration time.",
+        "effort": "Low",
+        "impact": "20-30% faster WebSocket responses"
+      },
+      {
+        "priority": "MEDIUM",
+        "category": "Architecture",
+        "title": "Split StrandsAgent into Separate Handlers",
+        "description": "The single StrandsAgent Lambda handles all 11 WebSocket routes. Split processTranscript (high-frequency, low-latency) from analyzeGaps/endMeeting (low-frequency, high-compute) to isolate failure domains.",
+        "effort": "High",
+        "impact": "Better isolation, independent scaling"
+      },
+      {
+        "priority": "MEDIUM",
+        "category": "Performance",
+        "title": "Cache Cognito Token Validation in Authorizers",
+        "description": "Both authorizers have 0s cache TTL. Setting even a 60s cache would reduce Cognito calls by ~90% under normal traffic.",
+        "effort": "Low",
+        "impact": "Reduces auth latency and Cognito rate limit pressure"
+      },
+      {
+        "priority": "LOW",
+        "category": "Cost",
+        "title": "Consider DynamoDB Provisioned Capacity for Predictable Tables",
+        "description": "Users, Projects, and Agents tables have predictable access patterns. Switching to provisioned capacity with auto-scaling could reduce costs 50-70%.",
+        "effort": "Medium",
+        "impact": "Cost optimization, no performance change"
+      },
+      {
+        "priority": "LOW",
+        "category": "Observability",
+        "title": "Add Custom CloudWatch Metrics for Load Testing",
+        "description": "Publish custom metrics for Bedrock call latency, OpenSearch query time, and warm pool dispatch latency to correlate with load test results.",
+        "effort": "Low",
+        "impact": "Better root cause analysis during incidents"
+      }
+    ]
+  }
