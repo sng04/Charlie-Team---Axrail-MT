@@ -1,6 +1,6 @@
 # Data Model
 
-14 DynamoDB tables + 1 OpenSearch domain.
+18 DynamoDB tables + 1 OpenSearch domain.
 
 ## D1 Tables (Meeting Management)
 
@@ -208,3 +208,58 @@ Enables many-to-many relationships between agents and skills. A single skill doc
 - Projects → KbDocuments (1:many via project-index GSI)
 - Projects → Agents (FK: agent_id)
 - BotCredentials → EventBridge → ValidateBotCredentialWorker (async SMTP validation)
+
+## Audit & Tracking Tables
+
+### AgentConfigHistory
+| Field | Type | Key |
+|---|---|---|
+| agent_id | String | PK |
+| version | Number | SK |
+| agent_name | String | |
+| role_prompt | String | |
+| behavior_guidelines | String | |
+| personality_id | String | |
+| personality_name | String | Resolved at snapshot time |
+| model_id | String | |
+| use_case | String | |
+| skill_names | List of Strings | Resolved at snapshot time |
+| changed_fields | List of Strings | |
+| created_at | String (ISO 8601) | Original agent creation time |
+| snapshot_at | String (ISO 8601) | When this snapshot was taken |
+
+Snapshots are created on agent update and skill assign/unassign, with a 5-second debounce to avoid duplicates from rapid frontend calls.
+
+### AdminChangelog
+| Field | Type | Key |
+|---|---|---|
+| changelog_id | String (UUID) | PK |
+| entity_type | String | GSI PK (entity-type-index) |
+| timestamp | String (ISO 8601) | GSI SK (entity-type-index) |
+| entity_id | String | |
+| entity_name | String | Human-readable name at time of action |
+| action | String | create / update / delete / login_success / login_failed / login_locked |
+| admin_user_id | String | |
+| admin_username | String | |
+| data | Map | Entity snapshot or changed fields |
+| previous_data | Map | Previous values (update/delete) |
+| changed_fields | List of Strings | Update only |
+| ip_address | String | Login events only |
+
+Covers all CRUD operations on users, projects, agents, personalities, skills, bot credentials, and project-user assignments. Also records login attempts (success, failure, lockout).
+
+### TokenUsage
+| Field | Type | Key |
+|---|---|---|
+| usage_id | String (UUID) | PK |
+| session_id | String | GSI PK (session-index) |
+| timestamp | String (ISO 8601) | GSI SK (session-index) |
+| project_id | String | |
+| action | String | e.g. sendMessage, detectQuestion, titanEmbed |
+| model_id | String | e.g. amazon.nova-pro-v1:0 |
+| input_tokens | Number | |
+| output_tokens | Number | |
+| total_tokens | Number | |
+| estimated | Boolean | True for embedding calls where count is estimated |
+
+Tracks Bedrock model token consumption per action. Embedding calls (Titan Embed, Cohere Embed) use estimated token counts (~4 chars per token).

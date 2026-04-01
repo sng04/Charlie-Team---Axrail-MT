@@ -35,8 +35,8 @@ AWS_SHARED_CREDENTIALS_FILE=.aws/credentials \
 pytest tests/unit/ -v
 
 # Integration tests (requires deployed stack + test fixtures)
-python scripts/test_case_1.py
-python scripts/test_case_2.py
+python scripts/test_case_novapay.py
+python scripts/test_case_short.py
 ```
 
 ## Architecture

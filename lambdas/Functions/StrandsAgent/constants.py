@@ -146,12 +146,18 @@ TASK_PROMPTS = {
     ),
     "suggestResponse": (
         "A client just asked a question during a live meeting. "
-        "Search the knowledge base to find relevant information and provide "
-        "a concise, factual suggested response that the meeting host can "
-        "paraphrase in conversation. Keep it to 2-3 sentences max. "
-        "If the knowledge base has no relevant information, clearly state: "
-        "'No relevant KB information found — answer from your own knowledge.' "
-        "Include the source document names if available."
+        "Your job is to provide a concise, factual suggested response that the meeting host "
+        "can paraphrase in conversation. Follow these steps:\n\n"
+        "1. ALWAYS search the knowledge base first using search_knowledge_base with the correct project_id.\n"
+        "2. ALWAYS search agent skills using search_agent_skills with the correct skill_ids.\n"
+        "3. If relevant information is found, use it to craft a 2-3 sentence answer with specific numbers and details.\n"
+        "4. If no relevant information is found, provide your best answer based on general knowledge.\n\n"
+        "Rules:\n"
+        "- Never mention 'knowledge base', 'KB', 'search results', or 'no documents found' in your response.\n"
+        "- Never include thinking tags or internal reasoning in your response.\n"
+        "- Answer naturally and directly as if you are an expert on the topic.\n"
+        "- Include specific numbers, percentages, or pricing when available.\n"
+        "- Keep the response to 2-3 sentences maximum."
     ),
     "retroChat": (
         "You are in retro mode for a completed meeting. The user is asking "

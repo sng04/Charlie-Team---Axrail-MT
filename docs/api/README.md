@@ -655,6 +655,140 @@ Returns auto-generated suggested questions for a session.
 
 ---
 
+## Agent Skills (Admin only)
+
+### List Agent Skills
+
+```
+GET /agents/{agentId}/skills
+```
+
+### Assign Skill to Agent
+
+```
+POST /agents/{agentId}/skills/{skillId}
+```
+
+Idempotent — returns 200 if already assigned.
+
+### Unassign Skill from Agent
+
+```
+DELETE /agents/{agentId}/skills/{skillId}
+```
+
+---
+
+## Agent Configuration History (Admin only)
+
+### List Config History
+
+```
+GET /agents/{agentId}/history
+```
+
+Returns all configuration snapshots for an agent, newest first. Each snapshot includes resolved `personality_name` and `skill_names`.
+
+### Get Specific Version
+
+```
+GET /agents/{agentId}/history/{version}
+```
+
+---
+
+## Admin Changelog (Admin only)
+
+Audit trail of all admin CRUD operations and login events.
+
+### List Changelog Entries
+
+```
+GET /admin/changelog?entity_type={type}&entity_id={id}&admin_user_id={uid}&limit=20
+```
+
+All query parameters are optional. When `entity_type` is provided, queries the GSI (newest first). Otherwise performs a scan.
+
+Response:
+
+```json
+{
+  "data": {
+    "entries": [
+      {
+        "changelog_id": "uuid",
+        "entity_type": "agent",
+        "entity_id": "uuid",
+        "entity_name": "Sales Assistant",
+        "action": "update",
+        "admin_user_id": "uuid",
+        "admin_username": "admin",
+        "timestamp": "2026-03-31T...",
+        "data": { "agent_name": "Sales Assistant" },
+        "previous_data": { "agent_name": "Old Name" },
+        "changed_fields": ["agent_name"]
+      }
+    ],
+    "count": 1,
+    "lastKey": "uuid"
+  }
+}
+```
+
+Supported `entity_type` values: `user`, `project`, `agent`, `personality`, `skill`, `bot_credential`, `project_user_assignment`, `agent_skill_assignment`, `login_attempt`.
+
+---
+
+## Token Usage (Admin only)
+
+### Usage Summary
+
+```
+GET /admin/token-usage/summary?period=2026-03
+```
+
+Returns aggregate token stats for a month. `period` defaults to current month.
+
+```json
+{
+  "data": {
+    "period": "2026-03",
+    "total_tokens": 284500,
+    "total_input_tokens": 142000,
+    "total_output_tokens": 142500,
+    "estimated_cost_usd": 14.22,
+    "total_sessions": 12,
+    "total_qa_pairs": 45
+  }
+}
+```
+
+### Daily Breakdown
+
+```
+GET /admin/token-usage/daily?period=2026-03
+```
+
+Returns per-day token counts. Only days with activity are included.
+
+### Usage by Project
+
+```
+GET /admin/token-usage/by-project?period=2026-03
+```
+
+Returns per-project breakdown with resolved `project_name`, sorted by `total_tokens` descending.
+
+### Per-Session Token Usage
+
+```
+GET /sessions/{sessionId}/token-usage
+```
+
+Returns token usage for a specific session with per-action breakdown.
+
+---
+
 ## Error Codes
 
 | Code | Meaning |

@@ -153,7 +153,7 @@ class MeetingBotStack(Stack):
         vocab_deployment = s3deploy.BucketDeployment(
             self,
             "VocabularyDeployment",
-            sources=[s3deploy.Source.asset("scripts", exclude=["*", "!tech-vocab-table.txt"])],
+            sources=[s3deploy.Source.asset("resources", exclude=["*", "!tech-vocab-table.txt"])],
             destination_bucket=self._vocab_bucket,
             destination_key_prefix="vocabulary",
         )

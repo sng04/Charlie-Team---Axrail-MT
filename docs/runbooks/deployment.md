@@ -179,8 +179,8 @@ pytest tests/unit/ -v
 
 ```bash
 # Run integration tests (requires test fixtures in resources/)
-python scripts/test_case_1.py
-python scripts/test_case_2.py
+python scripts/test_case_novapay.py
+python scripts/test_case_short.py
 ```
 
 ## Destroy Stacks

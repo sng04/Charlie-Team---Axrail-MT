@@ -141,11 +141,15 @@ def search_knowledge_base(query: str, project_id: str = "default-project") -> st
         formatted = []
         for i, hit in enumerate(hits, 1):
             src = hit["_source"]
-            score = hit["_score"]
             text = src.get("text", "")
             source_file = src.get("source_file", "unknown")
+            # Clean up UUID-based summary filenames from older indexed docs
+            if source_file and source_file.endswith(".md"):
+                name_part = source_file.replace(".md", "")
+                if len(name_part) == 36 and name_part.replace("-", "").isalnum():
+                    source_file = "meeting-summary.md"
             formatted.append(
-                f"[{i}] (score: {score:.4f}, source: {source_file})\n{text}"
+                f"[{i}] (source: {source_file})\n{text}"
             )
         return "\n\n".join(formatted)
     except Exception as exc:
@@ -205,23 +209,36 @@ def save_qa_pair(
     Returns:
         Confirmation message with the qa_pair_id, or error message on failure.
     """
+    return _save_qa_pair_internal(question, answer, session_id, project_id, source)
+
+
+def _save_qa_pair_internal(
+    question: str,
+    answer: str,
+    session_id: str,
+    project_id: str,
+    source: str,
+    suggested_answer: str = "",
+) -> str:
+    """Internal QA pair save with optional suggested_answer field."""
     if not QA_PAIRS_TABLE_NAME:
         return "Error: QA_PAIRS_TABLE_NAME environment variable not configured"
     qa_pair_id = str(uuid.uuid4())
     detected_at = datetime.now(timezone.utc).isoformat()
     try:
-        _get_qa_pairs_table().put_item(
-            Item={
-                "qa_pair_id": qa_pair_id,
-                "session_id": session_id,
-                "project_id": project_id,
-                "question": question,
-                "answer": answer,
-                "source": source,
-                "detected_at": detected_at,
-                "gsi_pk": "ALL",
-            }
-        )
+        item = {
+            "qa_pair_id": qa_pair_id,
+            "session_id": session_id,
+            "project_id": project_id,
+            "question": question,
+            "answer": answer,
+            "source": source,
+            "detected_at": detected_at,
+            "gsi_pk": "ALL",
+        }
+        if suggested_answer:
+            item["suggested_answer"] = suggested_answer
+        _get_qa_pairs_table().put_item(Item=item)
         return f"QA pair saved with id {qa_pair_id}"
     except Exception as exc:
         logger.exception("Failed to save QA pair")
@@ -404,7 +421,7 @@ def search_agent_skills(query: str, skill_ids: str) -> str:
             text = src.get("text", "")
             source_file = src.get("source_file", "unknown")
             formatted.append(
-                f"[{i}] (score: {score:.4f}, source: {source_file})\n{text}"
+                f"[{i}] (source: {source_file})\n{text}"
             )
         return "\n\n".join(formatted)
     except Exception as exc:

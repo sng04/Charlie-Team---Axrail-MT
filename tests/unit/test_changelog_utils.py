@@ -47,13 +47,14 @@ class TestLogAdminChange:
         mock_get_table.return_value = mock_table
 
         event = {"requestContext": {"authorizer": {"user_id": "u1", "username": "admin"}}}
-        log_admin_change(event, "project", "p1", "create", data={"name": "Test"})
+        log_admin_change(event, "project", "p1", "create", data={"name": "Test"}, entity_name="Test Project")
 
         mock_table.put_item.assert_called_once()
         item = mock_table.put_item.call_args[1]["Item"]
         assert item["entity_type"] == "project"
         assert item["action"] == "create"
         assert item["admin_username"] == "admin"
+        assert item["entity_name"] == "Test Project"
 
     @patch("changelog_utils._get_table")
     def test_fire_and_forget_on_error(self, mock_get_table):

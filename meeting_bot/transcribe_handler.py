@@ -321,9 +321,11 @@ class SentenceMerger:
     """
 
     # Max seconds of silence between fragments before flushing
-    MERGE_GAP_THRESHOLD = float(os.environ.get("MERGE_GAP_THRESHOLD", "1.0"))
-    # Min word count to consider a fragment "complete enough" on its own
-    MIN_STANDALONE_WORDS = int(os.environ.get("MERGE_MIN_STANDALONE_WORDS", "4"))
+    MERGE_GAP_THRESHOLD = float(os.environ.get("MERGE_GAP_THRESHOLD", "2.5"))
+    # Min word count to consider a fragment "complete enough" to flush
+    MIN_FLUSH_WORDS = int(os.environ.get("MERGE_MIN_FLUSH_WORDS", "5"))
+    # Max seconds to buffer before force-flushing regardless of punctuation
+    MAX_BUFFER_DURATION = float(os.environ.get("MERGE_MAX_BUFFER_DURATION", "15.0"))
 
     def __init__(self):
         self._buffer_text: List[str] = []
@@ -361,14 +363,25 @@ class SentenceMerger:
 
         flush_result = None
 
-        # Check time gap — if too large, flush old buffer first
+        # Check time gap — if too large AND buffer has enough content, flush
         if (
             self._buffer_text
             and self._buffer_end_time is not None
             and start_time is not None
         ):
             gap = start_time - self._buffer_end_time
-            if gap > self.MERGE_GAP_THRESHOLD:
+            word_count = sum(len(t.split()) for t in self._buffer_text)
+            if gap > self.MERGE_GAP_THRESHOLD and word_count >= self.MIN_FLUSH_WORDS:
+                flush_result = self._flush_buffer()
+
+        # Force flush if buffer has been accumulating too long
+        if (
+            self._buffer_text
+            and self._buffer_start_time is not None
+            and end_time is not None
+            and (end_time - self._buffer_start_time) > self.MAX_BUFFER_DURATION
+        ):
+            if not flush_result:
                 flush_result = self._flush_buffer()
 
         # Append to buffer
@@ -380,13 +393,12 @@ class SentenceMerger:
         if confidence is not None:
             self._buffer_confidences.append(confidence)
 
-        # Check if this fragment ends a sentence
-        if self._is_sentence_end(text):
+        # Check if this fragment ends a sentence AND buffer has enough words
+        word_count = sum(len(t.split()) for t in self._buffer_text)
+        if self._is_sentence_end(text) and word_count >= self.MIN_FLUSH_WORDS:
             merged = self._flush_buffer()
-            # If we also flushed a previous buffer due to time gap,
-            # return that one first — the caller should handle both
             if flush_result:
-                return flush_result  # merged will be handled via timer or next call
+                return flush_result
             return merged
 
         # Schedule a timer flush in case nothing else arrives

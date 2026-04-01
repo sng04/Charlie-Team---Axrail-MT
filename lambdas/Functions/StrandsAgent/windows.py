@@ -9,7 +9,7 @@ from aws_lambda_powertools import Logger
 
 from constants import MATCH_THRESHOLD, SUGGESTED_QUESTIONS_TABLE_NAME
 from helpers import _get_dynamodb, _post_to_connection, _broadcast_to_session
-from tools import save_qa_pair, _generate_embedding
+from tools import save_qa_pair, _save_qa_pair_internal, _generate_embedding
 
 logger = Logger(child=True)
 
@@ -137,13 +137,17 @@ def _check_answer_windows(
         if should_close:
             if window["collected_lines"]:
                 answer = " ".join(window["collected_lines"])
+                # Look up cached AI suggestion for this question
+                suggestions = conn_data.get("_pending_suggestions", {})
+                suggested = suggestions.pop(window["question_text"], "")
                 try:
-                    save_qa_pair(
+                    _save_qa_pair_internal(
                         question=window["question_text"],
                         answer=answer,
                         session_id=session_id,
                         project_id=project_id,
                         source="participant",
+                        suggested_answer=suggested,
                     )
                 except Exception:
                     logger.exception("Failed to auto-save QA pair")
@@ -153,6 +157,8 @@ def _check_answer_windows(
                     "answer": answer,
                     "source": "participant",
                 }
+                if suggested:
+                    qa_msg["suggested_answer"] = suggested
                 _post_to_connection(connection_id, qa_msg)
                 _broadcast_to_session(session_id, qa_msg, exclude_connection_id=connection_id)
             else:
@@ -213,13 +219,16 @@ def _check_user_response_windows(
         if should_close:
             if window["collected_lines"]:
                 answer = " ".join(window["collected_lines"])
+                suggestions = conn_data.get("_pending_suggestions", {})
+                suggested = suggestions.pop(window["question_text"], "")
                 try:
-                    save_qa_pair(
+                    _save_qa_pair_internal(
                         question=window["question_text"],
                         answer=answer,
                         session_id=session_id,
                         project_id=project_id,
                         source="client",
+                        suggested_answer=suggested,
                     )
                 except Exception:
                     logger.exception("Failed to auto-save client QA pair")
@@ -229,6 +238,8 @@ def _check_user_response_windows(
                     "answer": answer,
                     "source": "client",
                 }
+                if suggested:
+                    qa_msg["suggested_answer"] = suggested
                 _post_to_connection(connection_id, qa_msg)
                 _broadcast_to_session(session_id, qa_msg, exclude_connection_id=connection_id)
             else:

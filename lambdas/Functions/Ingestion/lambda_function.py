@@ -275,6 +275,26 @@ def lambda_handler(event, context):
             project_id = _extract_project_id(key)
             doc_type = _determine_doc_type(key)
 
+            # For meeting summaries, look up the readable name from KbDocuments
+            if "/summaries/" in key and KB_DOCUMENTS_TABLE_NAME:
+                try:
+                    from boto3.dynamodb.conditions import Attr
+                    kb_table = boto3.resource("dynamodb").Table(KB_DOCUMENTS_TABLE_NAME)
+                    s3_key = key
+                    kb_resp = kb_table.scan(
+                        FilterExpression=Attr("s3_key").eq(s3_key),
+                        ProjectionExpression="file_name",
+                        Limit=1,
+                    )
+                    kb_items = kb_resp.get("Items", [])
+                    if kb_items and kb_items[0].get("file_name"):
+                        raw_name = kb_items[0]["file_name"]
+                        clean = raw_name.replace("Summary - ", "").replace(".md", "").strip()
+                        slug = clean.lower().replace(" ", "-").replace("—", "-").replace("--", "-")
+                        source_file = f"{slug}-summary.md"
+                except Exception:
+                    source_file = "meeting-summary.md"
+
             for idx, chunk in enumerate(chunks):
                 embedding = _generate_embedding(bedrock_client, chunk)
                 document = {

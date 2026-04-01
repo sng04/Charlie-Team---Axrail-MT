@@ -20,8 +20,8 @@ class TestDynamoDBStack:
         stack = DynamoDBStack(app, "TestDynamoDBStack", env_name="dev")
         self.template = assertions.Template.from_stack(stack)
 
-    def test_seventeen_tables_created(self):
-        self.template.resource_count_is("AWS::DynamoDB::Table", 17)
+    def test_eighteen_tables_created(self):
+        self.template.resource_count_is("AWS::DynamoDB::Table", 18)
 
     def test_opensearch_domain_created(self):
         self.template.resource_count_is("AWS::OpenSearchService::Domain", 1)
@@ -52,4 +52,32 @@ class TestDynamoDBStack:
                     assertions.Match.object_like({"IndexName": "name-index"})
                 ]),
             }),
+        )
+
+    def test_token_usage_table_has_session_index(self):
+        self.template.has_resource_properties(
+            "AWS::DynamoDB::Table",
+            assertions.Match.object_like({
+                "TableName": "dev-TokenUsage",
+                "GlobalSecondaryIndexes": assertions.Match.array_with([
+                    assertions.Match.object_like({"IndexName": "session-index"})
+                ]),
+            }),
+        )
+
+    def test_admin_changelog_table_has_entity_type_index(self):
+        self.template.has_resource_properties(
+            "AWS::DynamoDB::Table",
+            assertions.Match.object_like({
+                "TableName": "dev-AdminChangelog",
+                "GlobalSecondaryIndexes": assertions.Match.array_with([
+                    assertions.Match.object_like({"IndexName": "entity-type-index"})
+                ]),
+            }),
+        )
+
+    def test_agent_config_history_table_exists(self):
+        self.template.has_resource_properties(
+            "AWS::DynamoDB::Table",
+            {"TableName": "dev-AgentConfigHistory"},
         )

@@ -41,7 +41,7 @@ REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "..", "resources", "test-case-short")
 
 BOT_EMAIL = "savioenoson.dev@gmail.com"
-MEETING_LINK = "https://meet.google.com/kxy-pozb-rqq"
+MEETING_LINK = "https://meet.google.com/xae-vdjm-tje"
 
 s3 = boto3.client("s3", region_name=REGION)
 dynamodb = boto3.resource("dynamodb", region_name=REGION)

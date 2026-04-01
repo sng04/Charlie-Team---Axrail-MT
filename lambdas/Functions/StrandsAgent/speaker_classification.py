@@ -236,26 +236,17 @@ def init_role_classifier(conn_data: dict) -> bool:
 def classify_line_role(text: str, conn_data: dict) -> str:
     """Classify a single transcript line's speaker role.
 
-    Embeds the text with Cohere Embed v3 and compares against cached
-    role centroids using cosine similarity.
-
-    Args:
-        text: The transcript line text.
-        conn_data: Connection data dict containing cached role_classifier.
-
-    Returns:
-        "user", "client", or "unknown".
+    Uses cached embedding if available, otherwise embeds and caches.
     """
     classifier = conn_data.get("role_classifier", {})
     if not classifier.get("initialized"):
         return "unknown"
 
-    user_centroid = classifier["user_centroid"]
-    client_centroid = classifier["client_centroid"]
-
-    # Skip very short lines — not enough signal
     if len(text.split()) < 4:
         return "unknown"
+
+    user_centroid = classifier["user_centroid"]
+    client_centroid = classifier["client_centroid"]
 
     try:
         embeddings = _embed_texts_cohere([text], input_type="search_query")
@@ -265,3 +256,45 @@ def classify_line_role(text: str, conn_data: dict) -> str:
     except Exception:
         logger.exception("classify_line_role failed")
         return "unknown"
+
+
+def classify_lines_batch(texts: list[str], conn_data: dict) -> list[str]:
+    """Classify multiple transcript lines in a single batch embedding call.
+
+    Much faster than calling classify_line_role per line — one Cohere API
+    call instead of N.
+
+    Args:
+        texts: List of transcript line texts.
+        conn_data: Connection data with cached role_classifier.
+
+    Returns:
+        List of roles ("user", "client", "unknown"), one per input text.
+    """
+    classifier = conn_data.get("role_classifier", {})
+    if not classifier.get("initialized"):
+        return ["unknown"] * len(texts)
+
+    user_centroid = classifier["user_centroid"]
+    client_centroid = classifier["client_centroid"]
+
+    # Split into embeddable (>= 4 words) and short lines
+    results = ["unknown"] * len(texts)
+    to_embed = []
+    indices = []
+    for i, text in enumerate(texts):
+        if len(text.split()) >= 4:
+            to_embed.append(text)
+            indices.append(i)
+
+    if not to_embed:
+        return results
+
+    try:
+        embeddings = _embed_texts_cohere(to_embed, input_type="search_query")
+        for j, emb in enumerate(embeddings):
+            results[indices[j]] = _classify_role(emb, user_centroid, client_centroid)
+    except Exception:
+        logger.exception("classify_lines_batch failed")
+
+    return results

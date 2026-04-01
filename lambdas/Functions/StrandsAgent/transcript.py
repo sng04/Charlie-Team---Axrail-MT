@@ -12,7 +12,7 @@ from constants import BEDROCK_REGION, MATCH_THRESHOLD, SESSIONS_TABLE_NAME, TRAN
 from helpers import _get_conn_data, _get_dynamodb, _post_to_connection, _broadcast_to_session
 from token_tracking import track_token_usage, _extract_token_usage
 from question_detection import _detect_question, _generate_suggested_response
-from speaker_classification import classify_line_role, init_role_classifier
+from speaker_classification import classify_line_role, classify_lines_batch, init_role_classifier
 from tools import _generate_embedding
 from windows import (
     _check_answer_windows,
@@ -166,13 +166,17 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
     # --- Build entries ---
     entries = []
     buffer = conn_data.get("transcript_buffer", [])
-    for line in lines:
+
+    # Batch classify speaker roles for single-speaker mode (1 API call vs N)
+    if single_speaker_mode:
+        line_texts = [line.get("text", "") for line in lines]
+        roles = classify_lines_batch(line_texts, conn_data)
+    else:
+        roles = [role_map.get(line.get("speaker", ""), "unknown") for line in lines]
+
+    for i, line in enumerate(lines):
         speaker = line.get("speaker", "Unknown")
-        if single_speaker_mode:
-            # Classify each line using Cohere Embed cosine similarity
-            speaker_role = classify_line_role(line.get("text", ""), conn_data)
-        else:
-            speaker_role = role_map.get(speaker, "unknown")
+        speaker_role = roles[i] if i < len(roles) else "unknown"
         timestamp = line.get("timestamp", "")
         if not timestamp:
             timestamp = datetime.now(timezone.utc).isoformat()
@@ -209,25 +213,26 @@ def _handle_process_transcript(body: dict, connection_id: str) -> dict:
         except Exception:
             logger.exception("Question detection failed for line")
 
-        # Run question matching (to get is_question_matched flag)
+        # Run question matching ONLY if there are unmatched suggested questions
+        # Skip the expensive Titan Embed call otherwise
         is_question_matched = False
         matched_question = None
-        try:
-            user_embedding = _generate_embedding(entry["text"])
-            unmatched = _get_unmatched_questions(session_id)
-            for q in unmatched:
-                q_embedding = q.get("embedding", [])
-                if not q_embedding:
-                    continue
-                # DynamoDB stores numbers as Decimal — convert to float
-                q_embedding = [float(v) for v in q_embedding]
-                sim = _cosine_similarity(user_embedding, q_embedding)
-                if sim >= MATCH_THRESHOLD:
-                    is_question_matched = True
-                    matched_question = (q, sim)
-                    break  # One match per line
-        except Exception:
-            logger.exception("Question matching failed for line")
+        unmatched = _get_unmatched_questions(session_id)
+        if unmatched:
+            try:
+                user_embedding = _generate_embedding(entry["text"])
+                for q in unmatched:
+                    q_embedding = q.get("embedding", [])
+                    if not q_embedding:
+                        continue
+                    q_embedding = [float(v) for v in q_embedding]
+                    sim = _cosine_similarity(user_embedding, q_embedding)
+                    if sim >= MATCH_THRESHOLD:
+                        is_question_matched = True
+                        matched_question = (q, sim)
+                        break
+            except Exception:
+                logger.exception("Question matching failed for line")
 
         # Determine is_new_question for window close decisions
         is_new_question = is_question_detected or is_question_matched

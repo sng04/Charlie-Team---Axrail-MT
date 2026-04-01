@@ -6,6 +6,8 @@ class DecimalEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, Decimal):
             return float(obj)
+        if isinstance(obj, set):
+            return list(obj)
         return super().default(obj)
 
 

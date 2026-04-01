@@ -12,6 +12,7 @@ from token_tracking import track_token_usage, _extract_token_usage
 from helpers import (
     _connection_prompts,
     _get_conn_data,
+    _get_dynamodb,
     _is_session_completed,
     _load_agent_skills,
     _lookup_project_id,
@@ -97,14 +98,29 @@ def _handle_connect(event) -> dict:
 
 
 def _handle_disconnect(event) -> dict:
-    """Handle $disconnect: clean up cache.
+    """Handle $disconnect: clean up cache and remove connection from session.
 
     Note: We do NOT change session status on disconnect. Session status is
     managed explicitly by endMeeting (→ completed) and $connect (→ active).
     A simple disconnect (e.g. network drop) should not alter the session state.
     """
     connection_id = event["requestContext"]["connectionId"]
-    _connection_prompts.pop(connection_id, None)
+    conn_data = _connection_prompts.pop(connection_id, None)
+
+    # Remove connection_id from the session's connection_ids set
+    if conn_data and conn_data.get("session_id"):
+        session_id = conn_data["session_id"]
+        try:
+            from constants import SESSIONS_TABLE_NAME
+            if SESSIONS_TABLE_NAME:
+                table = _get_dynamodb().Table(SESSIONS_TABLE_NAME)
+                table.update_item(
+                    Key={"session_id": session_id},
+                    UpdateExpression="DELETE connection_ids :cid_set",
+                    ExpressionAttributeValues={":cid_set": {connection_id}},
+                )
+        except Exception:
+            pass
 
     logger.info("Disconnected %s", connection_id)
     return {"statusCode": 200, "body": "Disconnected"}
@@ -141,15 +157,26 @@ def _handle_send_message(body: dict, connection_id: str) -> dict:
     skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     try:
-        model = BedrockModel(
-            model_id="amazon.nova-pro-v1:0",
-            region_name=BEDROCK_REGION,
-        )
-        agent = Agent(
-            model=model,
-            system_prompt=conn_data["system_prompt"],
-            tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
-        )
+        # Reuse or create the chat agent — preserves conversation history
+        chat_agent = conn_data.get("_chat_agent")
+        if not chat_agent:
+            model = BedrockModel(
+                model_id="amazon.nova-pro-v1:0",
+                region_name=BEDROCK_REGION,
+            )
+            chat_agent = Agent(
+                model=model,
+                system_prompt=conn_data["system_prompt"],
+                tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
+            )
+            conn_data["_chat_agent"] = chat_agent
+        else:
+            # Update system prompt in case personality changed
+            chat_agent.system_prompt = conn_data["system_prompt"]
+            # Trim conversation history to last 10 exchanges to prevent context bloat
+            if hasattr(chat_agent, 'messages') and len(chat_agent.messages) > 20:
+                chat_agent.messages = chat_agent.messages[-20:]
+
         enriched_message = (
             f"[Context: session_id={session_id}, project_id={project_id}]\n"
             f"IMPORTANT: When searching the knowledge base, always use "
@@ -158,7 +185,7 @@ def _handle_send_message(body: dict, connection_id: str) -> dict:
             f"skill_ids='{skill_ids_str}'.\n\n"
             f"{message}"
         )
-        result = agent(enriched_message)
+        result = chat_agent(enriched_message)
         inp, out = _extract_token_usage(result)
         track_token_usage(session_id, "sendMessage", "amazon.nova-pro-v1:0", inp, out, project_id)
 
@@ -509,6 +536,8 @@ def _handle_retro_analysis(body: dict, connection_id: str) -> dict:
             "session_id": session_id,
             "feedback": feedback_text,
         }
+        # Reset retro chat agent so it picks up new context
+        conn_data.pop("_retro_agent", None)
 
         _post_to_connection(connection_id, {
             "type": "retroFeedback",
@@ -547,28 +576,37 @@ def _handle_retro_chat(body: dict, connection_id: str) -> dict:
     skill_ids_str = ",".join(conn_data.get("skill_ids", []))
 
     try:
-        model = BedrockModel(
-            model_id="amazon.nova-pro-v1:0",
-            region_name=BEDROCK_REGION,
-        )
-        retro_system_prompt = (
-            f"{conn_data['system_prompt']}\n\n"
-            f"## Retro Analysis Context\n"
-            f"Session: {retro_ctx['session_id']}\n\n"
-            f"### Previous Retro Feedback\n{retro_ctx['feedback']}\n"
-        )
-        agent = Agent(
-            model=model,
-            system_prompt=retro_system_prompt,
-            tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
-        )
+        # Reuse or create the retro chat agent — preserves conversation history
+        retro_agent = conn_data.get("_retro_agent")
+        if not retro_agent:
+            model = BedrockModel(
+                model_id="amazon.nova-pro-v1:0",
+                region_name=BEDROCK_REGION,
+            )
+            retro_system_prompt = (
+                f"{conn_data['system_prompt']}\n\n"
+                f"## Retro Analysis Context\n"
+                f"Session: {retro_ctx['session_id']}\n\n"
+                f"### Previous Retro Feedback\n{retro_ctx['feedback']}\n"
+            )
+            retro_agent = Agent(
+                model=model,
+                system_prompt=retro_system_prompt,
+                tools=[search_knowledge_base, get_session_transcript, search_agent_skills],
+            )
+            conn_data["_retro_agent"] = retro_agent
+        else:
+            # Trim history to prevent context bloat
+            if hasattr(retro_agent, 'messages') and len(retro_agent.messages) > 20:
+                retro_agent.messages = retro_agent.messages[-20:]
+
         enriched = (
             f"{TASK_PROMPTS['retroChat']}\n"
             f"IMPORTANT: When searching agent skills, use "
             f"skill_ids='{skill_ids_str}'.\n\n"
             f"{message}"
         )
-        result = agent(enriched)
+        result = retro_agent(enriched)
         inp, out = _extract_token_usage(result)
         session_id = retro_ctx["session_id"]
         project_id = conn_data.get("project_id", "")

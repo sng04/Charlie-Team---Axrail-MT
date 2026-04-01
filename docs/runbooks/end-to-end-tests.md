@@ -18,16 +18,13 @@ Three test scripts exercise the stack:
 
 | Script | Domain | Fixture Dir |
 |---|---|---|
-| `scripts/test_all_endpoints.py` | REST + WebSocket endpoint coverage | N/A (self-contained) |
-| `scripts/test_case_1.py` | NovaPay fintech sales demo | `resources/test-case-1/` |
-| `scripts/test_case_2.py` | GreenBuild consulting kickoff | `resources/test-case-2/` |
+| `scripts/test_case_novapay.py` | NovaPay fintech sales demo (full ~15 min) | `resources/test-case-novapay/` |
 | `scripts/test_case_short.py` | Quick check-in test (~5 min) | `resources/test-case-short/` |
-
-`test_all_endpoints.py` validates all REST CRUD endpoints and WebSocket actions with synthetic data. It creates and cleans up its own test resources.
+| `scripts/backfill_changelog_names.py` | Backfill entity_name on changelog entries | N/A |
 
 `test_case_short.py` uses single-speaker transcript data (all `spk_0`) to test the Cohere Embed v3 speaker role classifier. See [Speaker Role Classification](../features/speaker-role-classification.md).
 
-The two full test case scripts follow the same 19-step flow:
+The full test case script follows a 17-step flow:
 
 1. Authenticate (JWT via `/auth/admin/login`)
 2. Upload KB documents to S3
@@ -51,22 +48,16 @@ The two full test case scripts follow the same 19-step flow:
 
 ## Running
 
-### All Endpoints (REST + WebSocket)
+### NovaPay Sales Demo (Full)
 
 ```bash
-AWS_SHARED_CREDENTIALS_FILE=.aws/credentials .venv/bin/python3 scripts/test_all_endpoints.py
+AWS_SHARED_CREDENTIALS_FILE=.aws/credentials .venv/bin/python3 scripts/test_case_novapay.py
 ```
 
-### Test Case 1: NovaPay Sales Demo
+### Test Case Short: Quick Check-In (~5 min)
 
 ```bash
-AWS_SHARED_CREDENTIALS_FILE=.aws/credentials .venv/bin/python3 scripts/test_case_1.py
-```
-
-### Test Case 2: GreenBuild Consulting Kickoff
-
-```bash
-AWS_SHARED_CREDENTIALS_FILE=.aws/credentials .venv/bin/python3 scripts/test_case_2.py
+AWS_SHARED_CREDENTIALS_FILE=.aws/credentials .venv/bin/python3 scripts/test_case_short.py
 ```
 
 ### Configuration
@@ -88,7 +79,7 @@ Both scripts read configuration from environment variables with sensible default
 
 ## Expected Outcome
 
-Each script prints results for all tests (19 steps for full test cases, 16 for `test_all_endpoints.py`). Review output against the expected results documented in `docs/testing/test-plan.md`.
+Each script prints results for all tests. Review output against the expected results documented in `docs/testing/test-plan.md`.
 
 Key things to verify:
 - Authentication returns a valid JWT token

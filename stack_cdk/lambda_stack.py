@@ -664,6 +664,7 @@ class LambdaStack(Stack):
                 ],
                 resources=[
                     f"arn:aws:bedrock:{bedrock_region}::foundation-model/amazon.nova-pro-v1:0",
+                    f"arn:aws:bedrock:{bedrock_region}::foundation-model/amazon.nova-lite-v1:0",
                     f"arn:aws:bedrock:{bedrock_region}::foundation-model/amazon.titan-embed-text-v2:0",
                 ],
             )
@@ -869,6 +870,58 @@ class LambdaStack(Stack):
         # This is passed to ECS containers for real-time transcript broadcast
         self.create_session_fn.add_environment("WEBSOCKET_API_URL", ws_endpoint)
         self.start_warm_pool_fn.add_environment("WEBSOCKET_API_URL", ws_endpoint)
+
+        # TranscriptBroadcast Lambda — triggered by DynamoDB Streams on Transcripts table
+        self._create_transcript_broadcast(ws_endpoint)
+
+        # QAPairBroadcast Lambda — triggered by DynamoDB Streams on QAPairs table
+        self._create_qa_pair_broadcast(ws_endpoint)
+
+    def _create_transcript_broadcast(self, ws_endpoint: str) -> None:
+        """Create Lambda triggered by Transcripts table DynamoDB Stream.
+
+        Broadcasts new transcript lines to all WebSocket connections for the session.
+        """
+        self.transcript_broadcast_fn = self._create_lambda_function(
+            "TranscriptBroadcast", "lambdas/Functions/TranscriptBroadcast",
+            timeout=10, memory_size=128,
+        )
+        self.transcript_broadcast_fn.add_environment("WEBSOCKET_ENDPOINT", ws_endpoint)
+
+        # Grant WebSocket management permissions (post_to_connection)
+        # Already granted globally via _grant_websocket_management_permissions
+
+        # Add DynamoDB Stream event source
+        from aws_cdk import aws_lambda_event_sources as event_sources
+        self.transcript_broadcast_fn.add_event_source(
+            event_sources.DynamoEventSource(
+                self.dynamodb_stack.transcripts_table,
+                starting_position=_lambda.StartingPosition.LATEST,
+                batch_size=10,
+                retry_attempts=2,
+            )
+        )
+
+    def _create_qa_pair_broadcast(self, ws_endpoint: str) -> None:
+        """Create Lambda triggered by QAPairs table DynamoDB Stream.
+
+        Broadcasts QA events to all WebSocket connections for the session.
+        """
+        self.qa_pair_broadcast_fn = self._create_lambda_function(
+            "QAPairBroadcast", "lambdas/Functions/QAPairBroadcast",
+            timeout=10, memory_size=128,
+        )
+        self.qa_pair_broadcast_fn.add_environment("WEBSOCKET_ENDPOINT", ws_endpoint)
+
+        from aws_cdk import aws_lambda_event_sources as event_sources
+        self.qa_pair_broadcast_fn.add_event_source(
+            event_sources.DynamoEventSource(
+                self.dynamodb_stack.qa_pairs_table,
+                starting_position=_lambda.StartingPosition.LATEST,
+                batch_size=10,
+                retry_attempts=2,
+            )
+        )
 
     def _create_ecs_task_state_handler(self) -> None:
         """Create Lambda and EventBridge rule to handle ECS task state changes."""

@@ -84,6 +84,7 @@ _defaults = {
     "COHERE_EMBED_MODEL_ID": "cohere.embed-english-v3",
     "ADMIN_CHANGELOG_TABLE_NAME": "test-AdminChangelog",
     "AGENT_CONFIG_HISTORY_TABLE_NAME": "test-AgentConfigHistory",
+    "TOKEN_USAGE_TABLE_NAME": "test-TokenUsage",
 }
 for k, v in _defaults.items():
     os.environ.setdefault(k, v)

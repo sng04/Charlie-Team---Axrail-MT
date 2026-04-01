@@ -167,6 +167,7 @@ class DynamoDBStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
             point_in_time_recovery=self.env_config.get("point_in_time_recovery", False),
+            stream=dynamodb.StreamViewType.NEW_IMAGE,
         )
 
         self.transcripts_table.add_global_secondary_index(
@@ -304,6 +305,7 @@ class DynamoDBStack(Stack):
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
             removal_policy=self.env_config.get("removal_policy", RemovalPolicy.DESTROY),
             point_in_time_recovery=self.env_config.get("point_in_time_recovery", False),
+            stream=dynamodb.StreamViewType.NEW_AND_OLD_IMAGES,
         )
 
         self.qa_pairs_table.add_global_secondary_index(

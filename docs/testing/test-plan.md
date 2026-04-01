@@ -2,21 +2,21 @@
 
 ## Overview
 
-This document defines tests for every AI agent function using two test cases. Each test maps to a specific agent action, describes the input, and defines the expected behavior. Use these to evaluate quality, tune prompts, and benchmark performance.
+This document defines tests for every AI agent function using the NovaPay Sales Demo test case. Each test maps to a specific agent action, describes the input, and defines the expected behavior. Use these to evaluate quality, tune prompts, and benchmark performance.
 
 ### Test Data Summary
 
-| | Test Case 1: NovaPay Sales Demo | Test Case 2: GreenBuild Consulting Kickoff |
-|---|---|---|
-| **Domain** | Fintech / payment processing | Sustainability consulting |
-| **KB files** | product-overview, pricing-guide, api-reference, security-compliance | carbon-reporting-methodology, regulatory-landscape, service-tiers-pricing |
-| **Skill files** | competitor-comparison, retail-industry-talking-points | manufacturing-emissions-guide, meridian-client-context |
-| **Transcript** | 36 lines, single-channel (`spk_0`) | 37 lines, single-channel (`spk_0`) |
-| **KB gap** | Multi-currency / international (not supported) | Carbon offsets / credits (not covered) |
+| | NovaPay Sales Demo |
+|---|---|
+| **Domain** | Fintech / payment processing |
+| **KB files** | product-overview, pricing-guide, api-reference, security-compliance |
+| **Skill files** | competitor-comparison, retail-industry-talking-points |
+| **Transcript** | 36 lines, single-channel (`spk_0`) |
+| **KB gap** | Multi-currency / international (not supported) |
 
 ---
 
-## Test Setup (Both Cases)
+## Test Setup
 
 ### Pre-requisites
 
@@ -35,7 +35,7 @@ This document defines tests for every AI agent function using two test cases. Ea
 **Action:** Upload KB files to S3 bucket
 **Trigger:** S3 OBJECT_CREATED → Ingestion Lambda
 
-### Test Case 1
+### NovaPay
 
 | Upload | Expected Result |
 |---|---|
@@ -43,14 +43,6 @@ This document defines tests for every AI agent function using two test cases. Ea
 | `pricing-guide.md` | Chunks indexed with text about "interchange-plus", "$149/month", "volume discounts". |
 | `api-reference.md` | Chunks indexed with "POST /payments", "webhooks", "SDKs". |
 | `security-compliance.md` | Chunks indexed with "PCI DSS Level 1", "SOC 2 Type II", "AES-256". |
-
-### Test Case 2
-
-| Upload | Expected Result |
-|---|---|
-| `carbon-reporting-methodology.md` | Chunks about "GHG Protocol", "Scope 1/2/3", "10-13 weeks". |
-| `regulatory-landscape.md` | Chunks about "SEC Climate Disclosure", "CBAM", "SB 253". |
-| `service-tiers-pricing.md` | Chunks about "$45,000-$75,000", "Enterprise Engagement", "add-on services". |
 
 ### Verification
 
@@ -66,19 +58,12 @@ curl -XGET "https://{opensearch-endpoint}/knowledge-vectors/_count"
 **Action:** Upload skill files via `POST /skills` then S3 upload
 **Trigger:** S3 OBJECT_CREATED on Skills bucket → SkillIngestion Lambda
 
-### Test Case 1
+### NovaPay
 
 | Upload | Expected Result |
 |---|---|
 | `competitor-comparison.md` (attached to sales agent) | OpenSearch contains chunks with `agent_id` metadata and `doc_type: skill`. Text includes "Stripe", "Square", "interchange-plus transparency". |
 | `retail-industry-talking-points.md` | Chunks include "BrightMart", "pain points", "discovery questions". |
-
-### Test Case 2
-
-| Upload | Expected Result |
-|---|---|
-| `manufacturing-emissions-guide.md` (attached to consulting agent) | Chunks with agent_id, text about "natural gas 53.06 kg CO2 per MMBtu", "refrigerants", "R-404A GWP 3,922". |
-| `meridian-client-context.md` | Chunks with agent_id, text about "340M revenue", "brake assemblies", "70,000-97,000 tCO2e". |
 
 ### Verification
 
@@ -91,20 +76,12 @@ Skills table record should show `status: "indexed"` after ingestion completes.
 **Action:** `processTranscript` with first 4-6 transcript lines
 **Expected:** Lines are processed, `transcriptProcessed` response returned with correct line count
 
-### Test Case 1
+### NovaPay
 
 **Input lines:** First 6 lines from the sales demo transcript (single-channel, `spk_0`)
 
 **Expected result:**
 - Response type: `transcriptProcessed` with `lines_processed: 6`
-- No `speaker_role_map` or `classification_confidence` in response
-
-### Test Case 2
-
-**Input lines:** First 4 lines from the consulting kickoff transcript (single-channel, `spk_0`)
-
-**Expected result:**
-- Response type: `transcriptProcessed` with `lines_processed: 4`
 - No `speaker_role_map` or `classification_confidence` in response
 
 ---
@@ -114,7 +91,7 @@ Skills table record should show `status: "indexed"` after ingestion completes.
 **Action:** `processTranscript` with lines containing questions
 **Expected:** Agent detects questions and generates suggested responses from KB
 
-### Test Case 1
+### NovaPay
 
 | Transcript Line | Detection Method | Expected suggestedResponse Topic |
 |---|---|---|
@@ -122,15 +99,6 @@ Skills table record should show `status: "indexed"` after ingestion completes.
 | `"Is that included in the enterprise plan or is it extra?"` | heuristic | Should reference ShieldAI included on Enterprise, Stripe charges $0.05 extra (from skill: competitor-comparison) |
 | `"Can NovaPay handle multi-currency transactions?"` | heuristic | Should state multi-currency NOT currently supported, Canada/UK Q3 2026 from `product-overview.md` |
 | `"What kind of uptime guarantees do you offer?"` | heuristic | Should reference 99.99% SLA, active-active AWS from `security-compliance.md` |
-
-### Test Case 2
-
-| Transcript Line | Detection Method | Expected suggestedResponse Topic |
-|---|---|---|
-| `"How exactly does the process work?"` | heuristic | Should reference GHG Protocol, 4 phases, 10-13 weeks from `carbon-reporting-methodology.md` |
-| `"What kind of data will you need from us?"` | heuristic | Should reference utility bills, fleet fuel, production logs from methodology + skill (manufacturing-emissions-guide) |
-| `"Does that affect us?"` (about CBAM) | model (no `?` but interrogative context) | Should reference CBAM covers steel/aluminum, add-on assessment from `regulatory-landscape.md` |
-| `"Can you help us evaluate offset options?"` | heuristic | Should indicate limited/no KB coverage — this is the gap topic |
 
 Note: All lines are processed uniformly regardless of speaker. The `questionDetected` message type is used for all detected questions.
 
@@ -141,7 +109,7 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 **Action:** `sendMessage` with direct questions
 **Expected:** Agent searches KB and/or skills, returns accurate answers
 
-### Test Case 1
+### NovaPay
 
 | Message | Expected Answer Source | Key Content to Verify |
 |---|---|---|
@@ -150,15 +118,6 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 | `"What's the onboarding timeline for a Drop-In SDK integration?"` | `api-reference.md` | States 1-2 weeks |
 | `"Does NovaPay support payments in Euros?"` | `product-overview.md` | Correctly states NO — USD only, international expansion planned |
 
-### Test Case 2
-
-| Message | Expected Answer Source | Key Content to Verify |
-|---|---|---|
-| `"What Scope 3 categories does GreenBuild cover?"` | `carbon-reporting-methodology.md` | Lists Categories 1, 4, 5, 6, 7 for standard; all 15 for enterprise |
-| `"What are the SEC climate reporting deadlines?"` | `regulatory-landscape.md` | Large accelerated filers 2025, accelerated 2026, SRC 2027 |
-| `"What's Meridian's estimated carbon footprint?"` | Skill: `meridian-client-context.md` | References 70,000-97,000 tCO2e/year estimate |
-| `"What are some ways Meridian could reduce emissions?"` | Skill: `meridian-client-context.md` | Mentions EAF steel switch, renewable energy PPA, LED/VFD upgrades |
-
 ---
 
 ## Test 6: detectQuestion — On-Demand Question Answering
@@ -166,21 +125,13 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 **Action:** `detectQuestion` with a specific question string
 **Expected:** Agent searches KB and returns a concise, factual answer
 
-### Test Case 1
+### NovaPay
 
 **Input:** `"What is the chargeback fee and when is it waived?"`
 **Expected:** References $15 per chargeback, waived if merchant wins dispute. Source: `pricing-guide.md`.
 
 **Input:** `"What encryption does NovaPay use for card data at rest?"`
 **Expected:** AES-256 with AWS KMS key management, annual rotation. Source: `security-compliance.md`.
-
-### Test Case 2
-
-**Input:** `"What penalties does a company face for not complying with SB 253?"`
-**Expected:** Administrative penalties up to $500,000/year. Source: `regulatory-landscape.md`.
-
-**Input:** `"How many suppliers should we survey for Scope 3 Category 1?"`
-**Expected:** Top 30-50 by spend, representing 70-80% of procurement emissions. Source: `carbon-reporting-methodology.md` + skill: `manufacturing-emissions-guide.md`.
 
 ---
 
@@ -189,7 +140,7 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 **Action:** `analyzeGaps` after transcript is loaded
 **Expected:** JSON with gaps (topics not well covered in KB) and suggested questions
 
-### Test Case 1
+### NovaPay
 
 **Expected gaps (high confidence):**
 - **Multi-currency processing** — Client asked directly, KB explicitly states it's not supported but provides no migration playbook
@@ -201,18 +152,6 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 
 **Expected suggested_questions:** Should include questions like "What is the detailed timeline for Canada expansion?" and "How does NovaPay integrate with third-party loyalty systems?"
 
-### Test Case 2
-
-**Expected gaps (high confidence):**
-- **Carbon offsets / credits** — Client asked directly, consultant deflected, no KB content exists on offset advisory
-- **Full Scope 3 (all 15 categories)** — Client's OEM customers may need this; standard engagement only covers 5 categories
-
-**Expected gaps (medium confidence):**
-- **Science-based target setting process** — Mentioned as an add-on but no methodology detail in KB
-- **Specific assurance provider recommendations** — KB mentions Deloitte/EY but no detail on the assurance process
-
-**Expected suggested_questions:** Should include "What carbon offset programs does GreenBuild recommend?" and "What is the process for full Scope 3 reporting across all 15 categories?"
-
 ---
 
 ## Test 8: endMeeting — Meeting Summary
@@ -220,7 +159,7 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 **Action:** `endMeeting` after transcript is loaded
 **Expected:** Markdown summary with structured sections
 
-### Test Case 1 — Expected Summary Sections
+### NovaPay — Expected Summary Sections
 
 | Section | Key Content |
 |---|---|
@@ -231,16 +170,6 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 | **Unresolved Questions** | Multi-currency / Canada timeline, loyalty program integration details |
 | **QA Pairs** | Should capture 5-8 Q&A exchanges from the transcript |
 
-### Test Case 2 — Expected Summary Sections
-
-| Section | Key Content |
-|---|---|
-| **Attendees** | Priya Sharma (GreenBuild), David Park (Meridian Manufacturing) — identified from conversational context |
-| **Key Discussion Topics** | GHG Protocol methodology, data collection requirements, Scope 3 supplier emissions, CBAM exposure, carbon offsets (unresolved), assurance readiness, pricing |
-| **Decisions Made** | Include assurance readiness add-on ($18K); CBAM assessment pending CFO/EU team discussion; April start targeting August board meeting |
-| **Action Items** | Priya: send formal proposal by Friday with breakdown + data request list, include team bios, follow up on offset advisory offering. David: confirm CBAM scope with EU sales team, begin gathering utility bills. |
-| **Unresolved Questions** | Carbon offset advisory, CBAM scope decision |
-
 ---
 
 ## Test 9: retroAnalysis — Post-Meeting Coaching
@@ -248,7 +177,7 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 **Action:** `retroAnalysis` (session must be marked inactive via `endMeeting` first)
 **Expected:** Structured feedback referencing specific transcript moments
 
-### Test Case 1 — Expected Feedback Areas
+### NovaPay — Expected Feedback Areas
 
 | Area | What to Look For |
 |---|---|
@@ -258,16 +187,6 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 | **Coaching Insights** | Should suggest: prepare a Canada expansion FAQ for future demos, have a loyalty integration one-pager ready, quantify the savings before the client asks |
 | **Missed Agenda Items** | Could note that implementation support details (who handles migration, dedicated PM) weren't covered |
 
-### Test Case 2 — Expected Feedback Areas
-
-| Area | What to Look For |
-|---|---|
-| **Communication Effectiveness** | Should note Priya explained the methodology clearly. Should flag the carbon offsets response was notably vague — "it's a complicated area" with no concrete next step |
-| **Question Handling Quality** | Should praise the CBAM answer (accurate, included pricing). Should flag the offset question was fumbled — client asked twice and got deflected both times |
-| **Knowledge Gap Assessment** | Carbon offsets is the clear gap. Should note this is a board-level concern for the client |
-| **Coaching Insights** | Should suggest: prepare an offset advisory FAQ or position statement, never say "let me look into it" without providing at least a high-level framework on the spot |
-| **Action Item Completeness** | Proposal by Friday is clear, but "look into offset advisory" is vague — needs a specific date and deliverable |
-
 ---
 
 ## Test 10: retroChat — Follow-Up Questions
@@ -275,19 +194,12 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 **Action:** `retroChat` after `retroAnalysis` has been completed
 **Expected:** Specific, evidence-based answers referencing the transcript and retro feedback
 
-### Test Case 1
+### NovaPay
 
 | Message | Expected Response |
 |---|---|
 | `"What were the strongest moments in this meeting?"` | Should reference the pricing comparison moment (10:03-10:04) where Alex gave specific numbers, and the security/PCI simplification explanation (10:08-10:09) |
 | `"How should I handle the Canada question better next time?"` | Should provide a concrete script or approach — e.g., acknowledge the gap, pivot to interim dual-processor strategy with specifics, offer a written timeline commitment |
-
-### Test Case 2
-
-| Message | Expected Response |
-|---|---|
-| `"What should I have said about carbon offsets?"` | Should suggest a structured response even with limited knowledge — e.g., explain the difference between avoidance and removal offsets, note SBTi's position, promise a detailed brief by a specific date |
-| `"Did I price the engagement correctly?"` | Should reference the $65-75K base + $18K assurance = $83-123K range, note it's within the client's $125K approved budget, and that the pricing was presented clearly |
 
 ---
 
@@ -296,7 +208,7 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 **Action:** `setSuggestedQuestions` with prepared questions, then `processTranscript` with lines where the user speaks those topics
 **Expected:** `questionMatched` events when user addresses a suggested topic
 
-### Test Case 1
+### NovaPay
 
 **Setup:** Set suggested questions:
 1. `"What is NovaPay's pricing structure for enterprise retailers?"`
@@ -307,16 +219,6 @@ Note: All lines are processed uniformly regardless of speaker. The `questionDete
 - Question 1 should match when the pricing discussion occurs (interchange-plus pricing explanation)
 - Question 2 should match when the Canada/UK expansion is discussed
 - Question 3 should match when PCI DSS and SOC 2 certifications are mentioned
-
-### Test Case 2
-
-**Setup:** Set suggested questions:
-1. `"What is GreenBuild's methodology for carbon measurement?"`
-2. `"What are the regulatory requirements for carbon reporting?"`
-
-**Expected matches:**
-- Question 1 matches when the GHG Protocol methodology is explained
-- Question 2 matches when SEC filing requirements are discussed
 
 ---
 

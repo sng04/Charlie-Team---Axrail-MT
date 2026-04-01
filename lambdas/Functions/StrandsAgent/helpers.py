@@ -217,7 +217,12 @@ def _get_conn_data(connection_id: str) -> dict:
 
 
 def _mark_session_active(session_id: str, connection_id: str) -> None:
-    """Update SessionsTable to mark a session as active."""
+    """Update SessionsTable to mark a session as active and add connection_id to the set.
+
+    Uses a condition expression to prevent:
+    1. Creating phantom records for deleted sessions (update_item upserts)
+    2. Flipping completed sessions back to active
+    """
     if not session_id or not SESSIONS_TABLE_NAME:
         return
     try:
@@ -226,16 +231,22 @@ def _mark_session_active(session_id: str, connection_id: str) -> None:
             Key={"session_id": session_id},
             UpdateExpression=(
                 "SET is_active = :active, last_activity_at = :ts, "
-                "connection_id = :cid"
+                "connection_id = :cid "
+                "ADD connection_ids :cid_set"
             ),
+            ConditionExpression="attribute_exists(session_id) AND (is_active <> :completed)",
             ExpressionAttributeValues={
                 ":active": "active",
                 ":ts": datetime.now(timezone.utc).isoformat(),
                 ":cid": connection_id,
+                ":cid_set": {connection_id},
+                ":completed": "completed",
             },
         )
     except Exception:
-        logger.exception("Failed to mark session %s as active", session_id)
+        # ConditionalCheckFailedException is expected for deleted/completed sessions
+        pass
+        pass
 
 
 def _mark_session_inactive(session_id: str) -> None:
